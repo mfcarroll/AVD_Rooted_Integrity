@@ -15,8 +15,14 @@ RP=/data/adb/ksu/bin/resetprop
 
   # 1) DELETE all visible init.svc.*/init.svc_debug_pid.* with emulator names
   DEL=0
+  # NOTE: this used to use sed with \| alternation, which toybox sed (Android's
+  # sed) does NOT support — it is a GNU extension. The pattern silently matched
+  # NOTHING, so this loop deleted 0 props on every boot since the first commit
+  # while logging "deleted 0" as if that were success. grep -E does support
+  # alternation, so prefilter with it and keep the sed trivial.
   for prop in $(getprop 2>/dev/null \
-                | sed -n 's/^\[\(init\.svc[^]]*\(ranchu\|qemu\|goldfish\)[^]]*\)\].*/\1/p'); do
+                | grep -E '^\[init\.svc[^]]*(ranchu|qemu|goldfish)' \
+                | sed -n 's/^\[\([^]]*\)\].*/\1/p'); do
     $RP -n -d "$prop" 2>/dev/null && DEL=$((DEL + 1))
   done
   echo "deleted $DEL init.svc.* emulator props"
@@ -24,7 +30,8 @@ RP=/data/adb/ksu/bin/resetprop
   # 2) DELETE every ro.boottime.* with emulator names (visible to apps)
   DEL=0
   for prop in $(getprop 2>/dev/null \
-                | sed -n 's/^\[\(ro\.boottime[^]]*\(ranchu\|qemu\|goldfish\)[^]]*\)\].*/\1/p'); do
+                | grep -E '^\[ro\.boottime[^]]*(ranchu|qemu|goldfish)' \
+                | sed -n 's/^\[\([^]]*\)\].*/\1/p'); do
     $RP -n -d "$prop" 2>/dev/null && DEL=$((DEL + 1))
   done
   echo "deleted $DEL ro.boottime.* emulator props"

@@ -66,14 +66,31 @@ else
   fail "security_patch.txt first line='$sp' — must be 'system=YYYY-MM-DD' (NOT all=)"
 fi
 
-echo "== Device registration (Play Protect needs a GSF android_id) =="
-aid=$(sh 'sqlite3 /data/data/com.google.android.gsf/databases/gservices.db "select value from main where name=\"android_id\";" 2>/dev/null')
-if [ -n "$aid" ] && [ "$aid" != "0" ]; then pass "GSF android_id present ($aid) — device is checked in"
-else note "No GSF android_id yet (sqlite3 may be absent; not fatal). If the verdict"; note "stays empty with GENERATE mode, the device isn't certified yet — ensure"; note "Wi-Fi is connected, wait a few minutes, then cold reboot."; fi
+echo "== Device registration + certification prerequisites =="
+# NOTE: /data/data/com.google.android.gsf/databases/gservices.db is STALE on
+# modern GMS — that directory is empty on Android 14+, so the old sqlite3 query
+# ALWAYS returned nothing and this check reported "not checked in" even on a
+# fully registered device. The check-in id now lives here, as "<id>:<token>".
+aid=$(sh 'cat /data/data/com.google.android.gms/files/checkin_id_token 2>/dev/null' | cut -d: -f1)
+[ -z "$aid" ] && aid=$(sh 'sqlite3 /data/data/com.google.android.gsf/databases/gservices.db "select value from main where name=\"android_id\";" 2>/dev/null')
+if [ -n "$aid" ] && [ "$aid" != "0" ]; then pass "Google check-in id present ($aid) — device is checked in"
+else fail "No Google check-in id — device is NOT registered with Google."; note "Ensure the network is up, wait for check-in, then cold reboot."; fi
+
+# Play Protect certification needs a signed-in Google account. A freshly built
+# or wiped AVD has none, which leaves deviceIntegrity EMPTY no matter how clean
+# the attestation chain is — the most common "everything passes but the verdict
+# still fails" cause.
+nacct=$($ADB shell "dumpsys account 2>/dev/null" 2>/dev/null | sed -n 's/.*Accounts: \([0-9][0-9]*\).*/\1/p' | head -n1 | tr -d '\r')
+if [ "${nacct:-0}" -gt 0 ]; then pass "Google account signed in ($nacct)"
+else fail "NO Google account signed in — deviceIntegrity will stay empty."; note "Sign in via Settings > Passwords & accounts, then COLD reboot."; fi
 
 if [ "$TRIGGER" = "1" ]; then
+  # NOTE: this used to clear /data/data/com.google.android.gms/files/droidguard/*,
+  # a path that DOES NOT EXIST on modern GMS — so the DroidGuard reset was a
+  # silent no-op and every "fresh" check reused cached DroidGuard state. The real
+  # caches are app_dg_cache/ (the VM bytecode cache) and app_dgp/.
   echo "== Triggering a fresh Play Integrity check (Play Store) =="
-  sh 'am force-stop com.android.vending; rm -rf /data/data/com.google.android.gms/files/droidguard/* 2>/dev/null; pm clear com.android.vending >/dev/null 2>&1; sleep 2; logcat -c; monkey -p com.android.vending -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1' >/dev/null
+  sh 'am force-stop com.android.vending; rm -rf /data/data/com.google.android.gms/app_dg_cache/* /data/data/com.google.android.gms/app_dgp/* 2>/dev/null; pkill -9 -f droidguard 2>/dev/null; pm clear com.android.vending >/dev/null 2>&1; sleep 2; logcat -c; monkey -p com.android.vending -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1' >/dev/null
   note "launched Play Store; waiting 30s for the PI flow..."
   sleep 30
 fi
