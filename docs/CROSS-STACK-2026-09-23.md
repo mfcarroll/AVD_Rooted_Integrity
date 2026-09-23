@@ -141,6 +141,88 @@ Cheap, reversible, and it removes a confound from every future test.
 Stack A is API 33 with a 2024-03-01 patch level; here it is API 36. Worth
 testing last — it is the most expensive change and the least evidenced.
 
+## RESULTS — experiments 1 and 2 ran the same night
+
+**Both failed to move the verdict.** Recording this because a negative result on
+the strongest lead is worth more than the hypothesis was.
+
+Applied to `Pixel_9_Fresh` (KernelSU-Next + SUSFS + ReZygisk + TEESimulator):
+
+1. **PlayIntegrityFork v18 → Integrity Box v42.** Installed via
+   `ksud module install`. It is genuinely a drop-in — same module id, and its
+   installer even fetched its own keybox (5815 bytes, the same size as the one
+   stack A runs).
+2. **tokay → stack A's comet profile, verbatim**, including the inverted flags
+   (`spoofProvider` 1→0, `spoofSignature` 0→1, `spoofPixel=1`). Confirmed
+   propagated globally after a cold boot:
+   `ro.build.fingerprint = google/comet_beta/comet:CANARY/…`, model
+   `Pixel 9 Pro Fold`.
+
+The module was verifiably live, so this is a valid test, not a silent no-op —
+`PIF/Native` logged its own rewrites:
+
+```
+D PIF/Native: [ro.product.first_api_level]: 36 -> 32
+D PIF/Native: [ro.vendor.api_level]: 202504 -> 32
+```
+
+Verdict afterwards — **identical to before the swap**:
+
+```json
+"deviceRecognitionVerdict": ["MEETS_DEVICE_INTEGRITY"],
+"appRecognitionVerdict":    "PLAY_RECOGNIZED",
+"appLicensingVerdict":      "UNLICENSED",
+"playProtectVerdict":       "UNEVALUATED",
+"deviceAttributes":         { "sdkVersion": 36 }
+```
+
+**So the PIF module was not the gate here**, and the v36→v42 effect measured on
+stack A does not transfer. Cross-stack transplant of the module + profile is
+ruled out as the explanation for the BASIC gap.
+
+### A third thing tried, also negative
+
+`/system/bin/su` is present on this stack, **world-readable and
+world-executable**, at a completely standard path — `stat()`-able by any app with
+no root at all. On a real device it does not exist. `/debug_ramdisk` is present
+too. And `device/data_adb/susfs4ksu/sus_path.txt` is **empty** — nothing but the
+upstream template comments — so SUSFS's path-hiding is compiled into the kernel
+with zero rules loaded. `02-avd-deeper-spoof.sh` only ever hides `/dev/qemu_pipe`
+style nodes.
+
+That looked like a strong candidate, because it explains the exact shape of the
+anomaly: DEVICE passes (the forged attestation says "a real certified comet")
+while BASIC fails (runtime tamper checks see `su` in the open). Applying
+`ksu_susfs add_sus_path /system/bin/su` live did **not** change the verdict.
+
+Caveat worth keeping: GMS was already running when the rule was applied, and
+SUSFS exempts root-granted processes, so this is weaker evidence than 1 and 2.
+It is worth one more attempt persisted into `sus_path.txt` across a cold boot
+before being written off. The empty `sus_path.txt` is a real gap regardless of
+whether it is *this* gap.
+
+### What that leaves
+
+The module, the profile, and the most obvious root tell are all eliminated. The
+remaining differences between the two stacks are structural:
+
+| | stack A (BASIC+DEVICE) | here (DEVICE only) |
+|---|---|---|
+| SDK | **33** | **36** — and reported raw to Google in `deviceAttributes` |
+| root | Magisk | KernelSU-Next |
+| hiding | Zygisk Next + Shamiko + DenyList | SUSFS + ReZygisk |
+| keystore | Tricky Store v1.4.1 | TEESimulator v3.2 |
+
+`deviceAttributes.sdkVersion: 36` is notable: Integrity Box spoofs
+`first_api_level` to 32, but Google is still told 36, so that attribute is read
+from the real runtime and cannot be reached from the module layer. Stack A
+reports 33. Of the four, the **SDK / system image** is now the best-evidenced
+remaining candidate and the cheapest of the structural changes to test — the
+others mean rebuilding the stack on a different root framework.
+
+Experiment 3 from the list below (dropping the global prop layer) is still
+untested and still cheap.
+
 ## What this does not explain
 
 Stack A has never reached STRONG either. Nothing here is a lead on STRONG; the

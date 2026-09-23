@@ -1,30 +1,32 @@
 # ============================================================================
 # THE SINGLE SOURCE OF TRUTH for the spoofed device identity.
 #
-# PIF reads this to spoof Build.* for Play Services, AND 00-make-fakes.sh /
-# 01-avd-prop-spoof.sh derive EVERY other spoof from it (per-partition props,
-# the bind-mounted /vendor/build.prop, dt_compatible, security_patch.txt). So
-# editing the fields below is the ONLY place you change the device identity —
-# everything else follows automatically on the next cold reboot.
+# PIF/Integrity Box reads this to spoof Build.* for Play Services, AND
+# 00-make-fakes.sh / 01-avd-prop-spoof.sh derive EVERY other spoof from it
+# (per-partition props, the bind-mounted /vendor/build.prop, dt_compatible,
+# security_patch.txt). Editing the fields below is the ONLY place the device
+# identity changes — everything else follows on the next cold reboot.
 #
-# Default: Pixel 9 (tokay) CANARY — the validated profile.
+# 2026-09-23: replaced the tokay (Pixel 9) profile with the comet
+# (Pixel 9 Pro Fold) profile taken VERBATIM off the avd-cloud-portable stack
+# while that stack was passing MEETS_BASIC_INTEGRITY + MEETS_DEVICE_INTEGRITY.
+# See docs/CROSS-STACK-2026-09-23.md. Paired with Integrity Box v42, which
+# replaced PlayIntegrityFork v18 (same module id, so same path).
 #
-# To use a DIFFERENT Pixel (or match a different Android version), replace the
-# Build Fields below with a current, valid profile for that device. Good sources:
-#   - github.com/chiteroman/PlayIntegrityFix (pif.json releases)
-#   - the PIF module's own autopif (run it ONCE on a throwaway device to harvest
-#     a profile, copy the values here, then NEVER run autopif on the real AVD —
-#     it drifts the profile on every boot). See docs/REPRODUCTION.md §7.
-# Keep all fields internally consistent (FINGERPRINT must contain BRAND/PRODUCT/
-# DEVICE/RELEASE/ID/INCREMENTAL). SECURITY_PATCH must be a real patch date.
+# NOTE the spoof flags differ from the old PIF v18 set in three places, two of
+# them INVERTED:  spoofProvider 1 -> 0,  spoofSignature 0 -> 1,  + spoofPixel=1.
+# spoofApps / spoofPixel only exist under Integrity Box.
+#
+# The profile carries a stated expiry. When it lapses, take a current one from
+# a working source rather than running autopif on this AVD (see REPRODUCTION §7).
 # ============================================================================
-# Build Fields - Pixel 9 (tokay) for STRONG INTEGRITY
+# Build Fields
 MANUFACTURER=Google
-MODEL=Pixel 9
-FINGERPRINT=google/tokay_beta/tokay:CANARY/ZP11.260821.010/16290768:user/release-keys
+MODEL=Pixel 9 Pro Fold
+FINGERPRINT=google/comet_beta/comet:CANARY/ZP11.260821.010/16290768:user/release-keys
 BRAND=google
-PRODUCT=tokay_beta
-DEVICE=tokay
+PRODUCT=comet_beta
+DEVICE=comet
 RELEASE=CANARY
 ID=ZP11.260821.010
 INCREMENTAL=16290768
@@ -33,43 +35,21 @@ TAGS=release-keys
 SECURITY_PATCH=2026-09-05
 DEVICE_INITIAL_SDK_INT=32
 
-# System Properties - comprehensive override
+# System Properties
 *.build.id=ZP11.260821.010
 *.security_patch=2026-09-05
 *api_level=32
-*.build.fingerprint=google/tokay_beta/tokay:CANARY/ZP11.260821.010/16290768:user/release-keys
-*.product.brand=google
-*.product.manufacturer=Google
-*.product.model=Pixel 9
-*.product.name=tokay_beta
-*.product.device=tokay
-*.product.board=tokay
-*.board.platform=tokay
-*.hardware=tokay
-*.boot.hardware=tokay
-*.boot.hardware.platform=tokay
-*.product.cpu.abi=arm64-v8a
-*.build.type=user
-*.build.tags=release-keys
-*.build.user=android-build
-*.build.host=abfarm
-*.build.flavor=tokay_beta-user
-ro.boot.qemu=0
-ro.kernel.qemu=0
-ro.kernel.qemu.gles=0
-ro.boot.virtio_mmio=0
-ro.boot.flash.locked=1
-ro.boot.veritymode=enforcing
-ro.boot.vbmeta.device_state=locked
-ro.boot.verifiedbootstate=green
-ro.debuggable=0
-ro.secure=1
 
-# Advanced Settings - tuned for STRONG INTEGRITY
+# Advanced Settings
+verboseLogs=0
+spoofApps=0
 spoofBuild=1
 spoofProps=1
-spoofProvider=1
-spoofSignature=0
+spoofProvider=0
+spoofSignature=1
 spoofVendingFinger=1
 spoofVendingSdk=0
-verboseLogs=0
+spoofPixel=1
+
+# Released On: 2026-09-16
+# Estimated Expiry: 2026-10-28
