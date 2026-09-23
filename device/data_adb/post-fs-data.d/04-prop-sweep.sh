@@ -48,10 +48,14 @@ RP=/data/adb/ksu/bin/resetprop
   done
   echo "deleted $DEL ro.boot.qemu.* props"
 
-  # 4) DELETE qemu.* user-mutable props
+  # 4) DELETE qemu.* AND vendor.qemu.* user-mutable props.
+  # NOTE: this used to match only '^qemu\.', so the five vendor.qemu.* props
+  # (vendor.qemu.dev.bootcomplete, .sf.fake_camera, .timezone, .vport.bluetooth,
+  # .vport.modem) survived every boot untouched.
   DEL=0
   for prop in $(getprop 2>/dev/null \
-                | sed -n 's/^\[\(qemu\.[^]]*\)\].*/\1/p'); do
+                | grep -E '^\[(vendor\.)?qemu\.' \
+                | sed -n 's/^\[\([^]]*\)\].*/\1/p'); do
     $RP -n -d "$prop" 2>/dev/null && DEL=$((DEL + 1))
   done
   echo "deleted $DEL qemu.* props"
