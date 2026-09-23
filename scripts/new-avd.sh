@@ -10,7 +10,7 @@
 # Usage:
 #   ./scripts/new-avd.sh all            # run every phase in order
 #   ./scripts/new-avd.sh create         # just make the AVD
-#   ./scripts/new-avd.sh boot|root|harden|verify
+#   ./scripts/new-avd.sh boot|root|harden|apps|verify
 #   AVD=My_Test_AVD ./scripts/new-avd.sh all
 #
 # Phases:
@@ -21,6 +21,8 @@
 #           allowlist, reboot
 #   harden  run install-device-setup.sh (keybox + profile + all boot scripts),
 #           cold boot
+#   apps    install the Play Integrity API Checker (split apk) so you can read a
+#           verdict without hunting for it
 #   verify  audit the hardening AND report the Google check-in id so you can see
 #           immediately whether the identity actually rotated
 #
@@ -71,6 +73,9 @@ KSUD=/data/adb/ksud
 # fresh download from GitHub would give you the STOCK package name and you would
 # have to re-hide it by hand.
 PAYLOADS="${PAYLOADS:-/Users/Shared/code/personal/avd-cloud-portable/payloads/ksu_modules}"
+# Test apps (Play Integrity API Checker). Shipped as a SPLIT apk — base.apk plus
+# split_config.*, so it needs `adb install-multiple`, not `adb install`.
+APPS="${APPS:-/Users/Shared/code/personal/avd-cloud-portable/payloads/apps}"
 
 # Fallbacks if PAYLOADS is unavailable (device/modules.md — validated set).
 MANAGER_URL="https://github.com/KernelSU-Next/KernelSU-Next/releases/download/v3.2.0/KernelSU_Next_v3.2.0_33129-release.apk"
@@ -268,6 +273,27 @@ phase_harden() {
     ok "hardening installed and cold-booted"
 }
 
+phase_apps() {
+    say "PHASE apps"
+    local d="$APPS/IntegrityCheck_Files"
+    if [ ! -d "$d" ]; then
+        bad "not found: $d — install the checker manually"
+        return 1
+    fi
+    # Split APK: base.apk + split_config.*.apk must go in together.
+    local apks; apks=$(ls "$d"/*.apk 2>/dev/null)
+    [ -n "$apks" ] || { bad "no apks in $d"; return 1; }
+    # shellcheck disable=SC2086
+    if adb install-multiple $apks >/dev/null 2>&1; then
+        ok "Play Integrity API Checker installed ($(echo "$apks" | wc -l | tr -d ' ') apks)"
+    else
+        bad "install-multiple failed"
+        return 1
+    fi
+    adb shell "pm path gr.nikolasspyr.integritycheck" >/dev/null 2>&1 \
+        && ok "verified present" || bad "not present after install"
+}
+
 phase_verify() {
     say "PHASE verify"
     echo "-- identity (THE gate: must differ from a burned device) --"
@@ -304,6 +330,7 @@ case "${1:-all}" in
     root)   phase_root ;;
     harden) phase_harden ;;
     verify) phase_verify ;;
-    all)    phase_create && phase_boot && phase_root && phase_harden && phase_verify ;;
-    *)      die "unknown phase '${1}' (create|boot|root|harden|verify|all)" ;;
+    apps)   phase_apps ;;
+    all)    phase_create && phase_boot && phase_root && phase_harden && phase_apps && phase_verify ;;
+    *)      die "unknown phase '${1}' (create|boot|root|harden|apps|verify|all)" ;;
 esac
