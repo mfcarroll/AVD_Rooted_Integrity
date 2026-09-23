@@ -201,6 +201,74 @@ It is worth one more attempt persisted into `sus_path.txt` across a cold boot
 before being written off. The empty `sus_path.txt` is a real gap regardless of
 whether it is *this* gap.
 
+### Correction: the structural differences are exonerated
+
+The reasoning above (and an earlier draft that pointed at the system image) was
+wrong, and the repo's own history says so. **This stack reached three green on
+2026-09-22 morning** — same API 36 image, same kernel, same KernelSU-Next +
+SUSFS + ReZygisk + TEESimulator, same empty SUSFS rule files, same global prop
+layer. None of those can be inherently incompatible with BASIC, so none of them
+explains the gap. `deviceAttributes.sdkVersion: 36` is a red herring.
+
+### Two more experiments, both also negative
+
+4. **The entire global prop layer removed.** The eight repo scripts that do the
+   spoofing (`00-make-fakes`, `01-avd-prop-spoof`, `02-avd-deeper-spoof`,
+   `04-prop-sweep`, `07-procbind-safe`, `09-buildprop-bind`, `11-prop-sweep-late`,
+   `13-susfs-late`) were disabled and the device cold booted, leaving it reporting
+   raw emulator values exactly like stack A:
+   `google/sdk_gphone64_arm64/emu64a:16/…`, model `sdk_gphone64_arm64`,
+   characteristics `emulator`, serial `EMULATOR36X6X11X0`. **Verdict unchanged.**
+   So the headline cross-stack difference — stack A spoofing nothing globally —
+   is verdict-neutral in both directions. It is a simplification opportunity, not
+   the gap. (Restored afterwards: it still hides the emulator from non-Play apps.)
+
+5. **Account state.** Signed in, one Google account, check-in id present
+   (`4553827889938236479`). Not the gap either.
+
+## THE ACTUAL DIFFERENCE — compare the two JSON responses
+
+Five device-side changes moved nothing. So rather than keep guessing, both stacks
+were made to run the same checker and their full responses compared. This had
+never been done; stack A was only ever known as "2 green" from the icons.
+
+| field | here (DEVICE only) | stack A (BASIC+DEVICE) |
+|---|---|---|
+| `deviceRecognitionVerdict` | `["MEETS_DEVICE_INTEGRITY"]` | `["MEETS_BASIC_INTEGRITY","MEETS_DEVICE_INTEGRITY"]` |
+| `playProtectVerdict` | **`UNEVALUATED`** | **`NO_ISSUES`** |
+| `recentDeviceActivity` | **`UNEVALUATED`** | **`LEVEL_1`** |
+| `appLicensingVerdict` | **`UNLICENSED`** | **`LICENSED`** |
+| `deviceAttributes` | `{ "sdkVersion": 36 }` | `{}` |
+| `appAccessRiskVerdict` | `{}` | `{ "appsDetected": [...] }` |
+
+Three fields come back **`UNEVALUATED`** here that are fully populated on stack A.
+In Play Integrity, `UNEVALUATED` does not mean "failed" — it means *a necessary
+requirement was missed*. That is the signature of an **incompletely provisioned
+Play environment**, not of root detection. Every root-hiding and spoofing theory
+tested tonight was aimed at the wrong layer.
+
+Note also that stack A returns `deviceAttributes: {}` — Google declines to report
+an SDK version at all — while here it returns `sdkVersion: 36`. Combined with
+`appAccessRiskVerdict` being populated only on stack A, Google is simply
+evaluating far more of the request on stack A than on this device.
+
+### What to try next, in order
+
+1. **Turn on Play Protect and let it complete a scan.** `playProtectVerdict:
+   UNEVALUATED` vs `NO_ISSUES` is the single cleanest difference and the most
+   directly actionable. Play Store -> Play Protect -> Scan.
+2. **Install the checker *from the Play Store*** rather than sideloading it, so
+   `appLicensingVerdict` becomes `LICENSED` like stack A. Cheap, and removes a
+   known difference even if licensing does not itself gate BASIC.
+3. **Let the device accumulate activity before judging it.**
+   `recentDeviceActivity: LEVEL_1` vs `UNEVALUATED` suggests stack A's long-lived
+   base has history this fresh AVD does not. If that is the mechanism, *every*
+   verdict measured on a newly created AVD within minutes of first boot is
+   suspect — including much of 2026-09-22. Worth re-testing a config after the
+   device has been signed in and used across a few sessions.
+
+Only after those three should structural changes be considered again.
+
 ### What that leaves
 
 The module, the profile, and the most obvious root tell are all eliminated. The

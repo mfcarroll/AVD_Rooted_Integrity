@@ -1,7 +1,18 @@
-# this contains suspicious paths you want 
-# to be hidden at boot-completed.sh
-# format: <path> <check max tries>
-# example
-# /system/addon.d # by default max tries is disabled
-# /vendor/bin/install-recovery.sh 1 # try to check only once
-# /system/bin/install-recovery.sh 15 # try to check for 15 seconds
+# Paths hidden from non-root processes at boot-completed.sh
+# format: <path> [check max tries in seconds]
+#
+# 2026-09-23: this file used to contain ONLY the upstream template comments, so
+# SUSFS's path-hiding was compiled into the kernel with zero rules loaded while
+# /system/bin/su sat at a standard path, mode 0755 — stat()-able and executable
+# by any app with no root at all. On a real device it does not exist.
+#
+# Hiding it did NOT change the Play Integrity verdict when tested (2026-09-23),
+# so this is a correctness fix, not a verdict fix. It is still plainly wrong to
+# ship the single most-checked root indicator in the open.
+/system/bin/su
+/system/xbin/su
+/system/sbin/su
+/vendor/bin/su
+/data/adb/ksu
+/data/adb/modules
+/data/adb/susfs4ksu
