@@ -135,13 +135,24 @@ phase_create() {
         ok "created AVD $AVD_NAME"
     fi
 
+    # Overwrite avdmanager's config with the repo template. avdmanager defaults
+    # PlayStore.enabled to NO even on a playstore system image — Play Integrity
+    # cannot work without it — and it omits most sensors, the skin and the
+    # sdcard, all of which are themselves emulator signals.
     local cfg="$avd_home/${AVD_NAME}.avd/config.ini"
-    grep -q '^hw.wifi.enabled' "$cfg" 2>/dev/null || echo "hw.wifi.enabled = yes" >> "$cfg"
-    # NOTE: advancedFeatures.ini (VirtioWifi=off) forces mac80211_hwsim, which
-    # means Wi-Fi only comes up via service.d/10-wlan0-virtwifi.sh. Leaving it
-    # OUT lets the emulator's VirtioWifi auto-connect, which is simpler and was
-    # verified working. Copy it in only if you specifically need hwsim.
-    ok "config.ini patched (hw.wifi.enabled=yes)"
+    local tmpl="$REPO_ROOT/device/avd-config/config.ini"
+    [ -f "$tmpl" ] || die "template missing: $tmpl"
+    sed -e "s|@AVD@|${AVD_NAME}|g" -e "s|@SDK@|${SDK}|g" "$tmpl" > "$cfg" \
+        || die "failed writing $cfg"
+    ok "config.ini written from device/avd-config template"
+    grep -q '^PlayStore.enabled *= *true' "$cfg" && ok "PlayStore.enabled=true" || bad "PlayStore NOT enabled"
+    grep -q '^hw.wifi.enabled *= *yes'    "$cfg" && ok "hw.wifi.enabled=yes"    || echo "hw.wifi.enabled = yes" >> "$cfg"
+    grep -q '^fastboot.forceColdBoot *= *yes' "$cfg" && ok "forceColdBoot=yes" || bad "cold boot not forced"
+    [ -d "$SDK/skins/pixel_9_pro_xl" ] && ok "skin present" || bad "skin missing: $SDK/skins/pixel_9_pro_xl"
+    # NOTE: advancedFeatures.ini (VirtioWifi=off) is deliberately NOT applied —
+    # it forces mac80211_hwsim, so Wi-Fi then depends entirely on
+    # service.d/10-wlan0-virtwifi.sh. Leaving it out lets the emulator's
+    # VirtioWifi auto-connect, which was verified working.
     ok "advancedFeatures.ini deliberately NOT applied — VirtioWifi auto-connects"
 }
 
@@ -173,7 +184,31 @@ phase_root() {
         say "downloading KSU-Next manager (STOCK package name — you will have to re-hide it)"
         curl -fL --retry 2 -o "$apk" "$MANAGER_URL" || die "manager download failed"
     fi
-    adb install -r "$apk" >/dev/null 2>&1 && ok "manager installed" || bad "manager install failed"
+    adb install -r "$apk" >/dev/null 2>&1 || bad "manager install returned non-zero"
+    sleep 5
+    local pkg
+    pkg=$(adb shell "pm list packages -3" 2>/dev/null | tr -d '\r' | sed 's/^package://' \
+          | grep -viE 'integritycheck|com\.google|com\.android' | head -1)
+    [ -n "$pkg" ] && ok "manager installed as $pkg (name is randomised when hidden)" \
+                  || { bad "manager not found after install"; return 1; }
+
+    # Launch once so it registers with the kernel. NOTE: this is necessary but
+    # NOT sufficient — KSU-Next still requires Superuser to be granted to
+    # com.android.shell in the manager UI, which cannot be scripted reliably.
+    adb shell "am start -n $pkg/.ui.MainActivity" >/dev/null 2>&1
+    sleep 10
+
+    # Modules install via `su -c ksud`, so root MUST exist first. Installing
+    # them before this gate silently fails on every module.
+    if ! adb shell "su -c id" 2>/dev/null | grep -q 'uid=0'; then
+        bad "shell root NOT active — cannot install modules yet"
+        echo
+        echo "  MANUAL GATE: in the KernelSU-Next manager (now open on the device):"
+        echo "    Superuser tab -> Shell (com.android.shell) -> toggle Superuser ON"
+        echo "  then re-run:  ./scripts/new-avd.sh root"
+        return 1
+    fi
+    ok "shell root active — proceeding to modules"
 
     # --- the four modules (specter deliberately excluded; see header) ---
     local zips=""
