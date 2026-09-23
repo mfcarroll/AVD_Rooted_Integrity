@@ -35,3 +35,6 @@ Image.gz
 *~
 .idea/
 *.iml
+
+# Local setup cache (manager APK, module zips, KSU allowlist) — not source.
+setup-cache/

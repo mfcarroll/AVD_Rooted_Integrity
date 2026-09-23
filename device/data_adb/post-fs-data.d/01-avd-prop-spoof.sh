@@ -95,7 +95,25 @@ fi
   # Vendor build
   $RP -n ro.vendor.build.security_patch "$PIX_PATCH"
 
-  # Verified boot state
+  # Verified boot state.
+  # ro.boot.vbmeta.digest was previously supplied ONLY by the specter module's
+  # boot_hash feature — nothing in this repo set it, so uninstalling specter
+  # silently dropped it. A locked real device reports a real 64-hex vbmeta
+  # digest here; an emulator reports none. Generate one once and reuse it, so
+  # the value is stable across boots (a digest that changes every boot is its
+  # own tell) and so this repo no longer depends on specter.
+  _vbd_file=/data/adb/avd-fake/vbmeta_digest
+  if [ -s "$_vbd_file" ]; then
+      _vbd=$(cat "$_vbd_file")
+  else
+      _vbd=$(od -v -An -tx1 -N32 /dev/urandom 2>/dev/null | tr -d ' \n')
+      [ -n "$_vbd" ] && printf '%s' "$_vbd" > "$_vbd_file"
+  fi
+  case "$_vbd" in
+      ????????????????????????????????????????????????????????????????)
+          $RP -n ro.boot.vbmeta.digest "$_vbd" ;;
+  esac
+
   $RP -n ro.boot.flash.locked       "1"
   $RP -n ro.boot.veritymode         "enforcing"
   $RP -n ro.boot.vbmeta.device_state "locked"

@@ -14,7 +14,7 @@ versions usually work, but SUSFS in particular is tightly coupled to the kernel
 | **KernelSU-Next** | commit `5a4a718…` (matches kernel) | Root framework; provides `su`, `resetprop`, `ksu_susfs`. | <https://github.com/KernelSU-Next/KernelSU-Next> |
 | **SUSFS for KernelSU** | v2.1.0-R27 (`susfs4ksu`) | Userspace half of SUSFS: `/proc/*` open-redirects, `sus_path`, `sus_map`, uname spoof. Reads `/data/adb/susfs4ksu/*`. | <https://gitlab.com/simonpunk/susfs4ksu> |
 | **TEESimulator** (`tricky_store`) | v3.2 (build 67) | Forges the hardware attestation chain from the keybox. Reads `/data/adb/tricky_store/`. | <https://github.com/JingMatrix/TEESimulator> |
-| **Play Integrity Fork** (`playintegrityfix`) | v16 | Spoofs `Build.*` + props to the Pixel 9 profile in `pif/custom.pif.prop`. | <https://github.com/osm0sis/PlayIntegrityFork> |
+| **Play Integrity Fork** (`playintegrityfix`) | v18 | Spoofs `Build.*` + props to the Pixel 9 profile in `pif/custom.pif.prop`. | <https://github.com/osm0sis/PlayIntegrityFork> |
 | **ReZygisk** | v1.0.0 | Zygisk implementation that injects PIF + Vector into zygote. | <https://github.com/PerformanC/ReZygisk> |
 | **Vector** (`zygisk_vector`, LSPosed fork) | v2.0 (3021) | Zygisk-based hook manager. (Only needed if you also run LSPosed-style modules; for pure PI it can be omitted.) | <https://github.com/JingMatrix/LSPosed> |
 
@@ -30,7 +30,7 @@ https://github.com/KernelSU-Next/KernelSU-Next/releases/download/v3.2.0/KernelSU
 # KSU module zips (ksud module install <zip>)
 https://github.com/sidex15/susfs4ksu-module/releases/download/v1.5.2%2B_R27/ksu_module_susfs_1.5.2%2B.zip
 https://github.com/PerformanC/ReZygisk/releases/download/v1.0.0/ReZygisk-v1.0.0-release.zip
-https://github.com/osm0sis/PlayIntegrityFork/releases/download/v16/PlayIntegrityFork-v16.zip
+https://github.com/osm0sis/PlayIntegrityFork/releases/download/v18/PlayIntegrityFork-v18.zip
 https://github.com/JingMatrix/TEESimulator/releases/download/v3.2/TEESimulator-v3.2-67-Release.zip
 ```
 
