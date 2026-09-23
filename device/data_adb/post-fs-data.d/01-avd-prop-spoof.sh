@@ -33,6 +33,24 @@ PIX_ID=ZP11.260417.009
 PIX_INC=15372612
 PIX_PATCH=2026-05-05
 
+# WAIT for 00-make-fakes.sh to produce profile.env before reading it.
+#
+# The scripts in post-fs-data.d are NOT guaranteed to run strictly one after
+# another, and 00-make-fakes.sh does real work (it parses custom.pif.prop and
+# regenerates several files). Observed 2026-09-23 on the KernelSU stack: this
+# script logged "profile.env missing!" at 15:46:29 and applied its hardcoded
+# fallback, while profile.env -- containing the CORRECT profile -- was written
+# moments later in the same boot.
+#
+# The fallback is the April tokay profile (ZP11.260417.009), which Google stopped
+# accepting during 2026-09-22. So the race did not merely lose the managed
+# profile, it silently substituted a known-dead one, and every layer downstream
+# then disagreed with custom.pif.prop.
+_wait=0
+while [ ! -s "$PROFILE" ] && [ "$_wait" -lt 20 ]; do
+    sleep 1; _wait=$((_wait + 1))
+done
+
 # Prefer the generated profile so this layer can never drift from the others.
 if [ -f "$PROFILE" ]; then
   . "$PROFILE"
@@ -46,7 +64,7 @@ if [ -f "$PROFILE" ]; then
   [ -n "$BUILD_ID" ]       && PIX_ID="$BUILD_ID"
   [ -n "$INCREMENTAL" ]    && PIX_INC="$INCREMENTAL"
   [ -n "$SECURITY_PATCH" ] && PIX_PATCH="$SECURITY_PATCH"
-  PROFILE_SRC="profile.env"
+  PROFILE_SRC="profile.env (waited ${_wait}s)"
 else
   PROFILE_SRC="HARDCODED FALLBACK (profile.env missing!)"
 fi
