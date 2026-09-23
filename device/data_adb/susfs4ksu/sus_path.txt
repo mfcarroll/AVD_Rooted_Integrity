@@ -7,8 +7,18 @@
 # by any app with no root at all. On a real device it does not exist.
 #
 # Hiding it did NOT change the Play Integrity verdict when tested (2026-09-23),
-# so this is a correctness fix, not a verdict fix. It is still plainly wrong to
-# ship the single most-checked root indicator in the open.
+# and the reason is worse than "not load-bearing": THESE RULES ARE PROBABLY INERT.
+#
+# Measured 2026-09-23 on the KernelSU AVD: the kernel advertises
+# CONFIG_KSU_SUSFS_SUS_PATH, but `ksu_susfs add_sus_path <path>` registers
+# NOTHING -- /data/adb/ksu/susfs4ksu/susfs_stats.txt still reports sus_path=0
+# afterwards, and the path stays visible. The command exits 0 either way, which is
+# the same silent-success behaviour that made add_open_redirect look like it was
+# working earlier in this repo's history.
+#
+# So do not trust this file to hide anything until sus_path=N is confirmed
+# non-zero in susfs_stats.txt. Left in place because the entries are correct in
+# intent and cost nothing, but they are not doing the job yet.
 /system/bin/su
 /system/xbin/su
 /system/sbin/su
