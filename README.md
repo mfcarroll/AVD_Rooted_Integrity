@@ -18,10 +18,22 @@
 
 ---
 
-> **Status 2026-09-22:** this currently reaches **`MEETS_DEVICE_INTEGRITY`**, not
-> STRONG. The profile that produced a full three-label pass stopped being
-> accepted by Google during 2026-09-22 — verified by a controlled A/B on a fresh
-> device. See [`docs/FINDINGS-2026-09-22.md`](docs/FINDINGS-2026-09-22.md).
+> **Status 2026-09-23:** confirmed reaching **`MEETS_STRONG_INTEGRITY`** — all
+> three labels.
+>
+> A previous note here claimed only `MEETS_DEVICE_INTEGRITY`. **That was wrong,
+> and so was its explanation.** The cause was not Google withdrawing a profile:
+> the Play Integrity *checker app* had been sideloaded with a plain
+> `adb install-multiple`, which leaves `installerPackageName` unset. Play
+> Integrity then returns `appLicensingVerdict: UNLICENSED` and **withholds the
+> rest of the evaluation** — BASIC and STRONG silently disappear from
+> `deviceRecognitionVerdict`. Adding `-i com.android.vending` to the *same APK
+> bytes* restores all three. See
+> [`docs/FINDING-installer-attribution.md`](docs/FINDING-installer-attribution.md).
+>
+> Because of this, verdicts recorded in
+> [`docs/FINDINGS-2026-09-22.md`](docs/FINDINGS-2026-09-22.md) were measured
+> through a mis-attributed checker and are **not reliable**.
 
 A reproducible recipe for a **rooted Pixel-class Android emulator (AVD) that
 passes Google Play Integrity** and presents as real Pixel hardware to apps. No StrongBox

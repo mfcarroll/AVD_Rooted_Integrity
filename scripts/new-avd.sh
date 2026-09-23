@@ -284,7 +284,15 @@ phase_apps() {
     local apks; apks=$(ls "$d"/*.apk 2>/dev/null)
     [ -n "$apks" ] || { bad "no apks in $d"; return 1; }
     # shellcheck disable=SC2086
-    if adb install-multiple $apks >/dev/null 2>&1; then
+    # -i com.android.vending is REQUIRED, not cosmetic. Without Play attribution
+    # installerPackageName is null, Play Integrity returns UNLICENSED, and it then
+    # WITHHOLDS the rest of the evaluation: BASIC and STRONG vanish from
+    # deviceRecognitionVerdict and playProtect/recentDeviceActivity/appAccessRisk
+    # all report UNEVALUATED. Measured 2026-09-23 -- same APK bytes, one flag:
+    #   plain sideload -> [DEVICE]                 (1 green)
+    #   with -i        -> [BASIC, DEVICE, STRONG]  (3 green)
+    # See docs/FINDING-installer-attribution.md.
+    if adb install-multiple -i com.android.vending $apks >/dev/null 2>&1; then
         ok "Play Integrity API Checker installed ($(echo "$apks" | wc -l | tr -d ' ') apks)"
     else
         bad "install-multiple failed"
