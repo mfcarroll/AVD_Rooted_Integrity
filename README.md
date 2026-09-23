@@ -4,7 +4,7 @@
 
 **A reproducible recipe for a rooted Pixel-class Android emulator (AVD) that passes Google Play Integrity.**
 
-[![Verdict](https://img.shields.io/badge/Play_Integrity-MEETS__STRONG__INTEGRITY-7c5cff?style=flat-square)](docs/INTEGRITY_CHAIN.md)
+[![Verdict](https://img.shields.io/badge/Play_Integrity-MEETS__DEVICE__INTEGRITY-4f8cff?style=flat-square)](docs/FINDINGS-2026-09-22.md)
 [![Play Protect](https://img.shields.io/badge/Play_Protect-certified-3fd07f?style=flat-square)](docs/INTEGRITY_CHAIN.md)
 [![Device](https://img.shields.io/badge/device-Pixel_9_·_android--36-4f8cff?style=flat-square)](device/pif/custom.pif.prop)
 [![Kernel](https://img.shields.io/badge/kernel-custom_6.6_·_KSU--Next_+_SUSFS-7c5cff?style=flat-square)](kernel-build/)
@@ -18,9 +18,13 @@
 
 ---
 
+> **Status 2026-09-22:** this currently reaches **`MEETS_DEVICE_INTEGRITY`**, not
+> STRONG. The profile that produced a full three-label pass stopped being
+> accepted by Google during 2026-09-22 — verified by a controlled A/B on a fresh
+> device. See [`docs/FINDINGS-2026-09-22.md`](docs/FINDINGS-2026-09-22.md).
+
 A reproducible recipe for a **rooted Pixel-class Android emulator (AVD) that
-passes Google Play Integrity all the way to `MEETS_STRONG_INTEGRITY`** (Play
-Protect certified) and presents as real Pixel hardware to apps. No StrongBox
+passes Google Play Integrity** and presents as real Pixel hardware to apps. No StrongBox
 hardware required — TEESimulator forges the full attestation chain from your
 own keybox, so the verdict reaches **strong** integrity, not just device.
 
