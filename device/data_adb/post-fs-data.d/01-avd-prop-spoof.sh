@@ -57,8 +57,11 @@ fi
 
   # Clear qemu-detection knobs
   $RP -n -d ro.boot.qemu 2>/dev/null
-  $RP -n ro.kernel.qemu 0
-  $RP -n ro.kernel.qemu.gles 0
+  # DELETE these rather than setting them to 0 — the PROP NAME itself is the
+  # tell, so `ro.kernel.qemu=0` still announces an emulator to anything that
+  # enumerates props rather than reading the value.
+  $RP -n -d ro.kernel.qemu 2>/dev/null
+  $RP -n -d ro.kernel.qemu.gles 2>/dev/null
   $RP -n -d ro.boot.virtio_mmio 2>/dev/null
 
   # Hardware
