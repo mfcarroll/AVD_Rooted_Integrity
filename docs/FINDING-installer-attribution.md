@@ -38,15 +38,43 @@ Full field-by-field difference:
 - **Not the binary.** All four APKs are byte-identical; `appRecognitionVerdict`
   was already `PLAY_RECOGNIZED` in both cases, i.e. Google always recognised the
   code as genuine.
-- **Not account entitlement.** After installing from Play (so the account
-  demonstrably owns the app *on this device*), uninstalling and re-sideloading
-  plainly returned immediately to `UNLICENSED` / `[DEVICE]`. Ownership does not
-  survive the reinstall.
+- **Account entitlement IS part of it — corrected 2026-09-23.** An earlier
+  version of this document said entitlement was *not* involved, on the strength
+  of one test: after installing from Play (so the account owned the app on this
+  device), uninstalling and re-sideloading plainly returned to `UNLICENSED`.
+  That shows attribution is **necessary**; it was over-read as showing it is
+  **sufficient**. Switching the signed-in Google account while leaving the
+  attributed install completely untouched flipped `LICENSED -> UNLICENSED` and
+  dropped the verdict to `[DEVICE]`. Installing the app from Play under the new
+  account restored three green.
+
+  So **both conditions are necessary and neither alone is sufficient**:
+
+  | install attributed to Play | account entitled | `appLicensingVerdict` | verdict |
+  |---|---|---|---|
+  | yes | yes | `LICENSED` | BASIC + DEVICE + STRONG |
+  | yes | no | `UNLICENSED` | DEVICE only |
+  | no | yes | `UNLICENSED` | DEVICE only |
 - **Not server-side verification.** This was the natural hypothesis — that Google
   tracks whether this device ever installed this app from Play. **It does not.**
   Sideloading the repo's own APKs with `-i com.android.vending` is accepted and
   yields three green. The claim is taken at face value.
-- **It is the local `installerPackageName` string**, and nothing else.
+- **Not server-side install history.** Google does not check whether this device
+  ever received this app from Play; the `-i` claim on a local sideload is taken
+  at face value, provided the account is entitled.
+
+### Practical rule
+
+For each package whose integrity matters — the checker, and **WhatsApp** —
+install it from the Play Store **once** with the build account (which grants the
+entitlement), then sideload whatever build you want with
+`-i com.android.vending`. `scripts/pull-app.sh` in `avd-cloud-portable` extracts
+the Play copy, refuses to extract from a non-Play install, and emits an installer
+that carries the flag.
+
+`installerPackageName` is also readable by any app with no root at all, so an app
+that cares — WhatsApp plausibly among them — can check it directly, entirely
+independently of the Play Integrity API.
 
 The important and non-obvious part is the *blast radius*: `appLicensingVerdict`
 is an account-level field about app ownership, so it would be reasonable to
