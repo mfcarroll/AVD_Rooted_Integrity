@@ -50,13 +50,22 @@ The fix is layered:
 - `post-fs-data.d/01-avd-prop-spoof.sh` — sets the Pixel 9 (`tokay`) identity
   across **all** partition prop namespaces, clears `ro.kernel.qemu*` /
   `ro.boot.qemu*`, and sets verified-boot props (`locked`, `green`, `enforcing`).
-- `post-fs-data.d/08-partition-props.sh` — re-asserts every per-partition
-  `ro.product.<partition>.*` (belt-and-suspenders against init re-setting them).
+- ~~`post-fs-data.d/08-partition-props.sh`~~ — **DOES NOT EXIST.** Described here
+  but never present in git history or on any device. `01-avd-prop-spoof.sh`
+  already sets every per-partition namespace and `verify-integrity.sh` confirms
+  they hold, so nothing is missing in practice — but do not hunt for this file.
 - `post-fs-data.d/09-buildprop-bind.sh` — bind-mounts `avd-fake/vendor_build.prop`
   over `/vendor/build.prop` (and the odm one) so the **file** keymint reads
   matches the props. This is the piece that actually clears `CANNOT_ATTEST_IDS`.
-- `post-fs-data.d/04-prop-sweep.sh` + `06-bootloader-safe.sh` — delete every
-  remaining `qemu.*` / `ranchu*` / `goldfish*` / `ro.boottime.*emulator*` prop.
+- `post-fs-data.d/04-prop-sweep.sh` + `service.d/11-prop-sweep-late.sh` — delete
+  every remaining `qemu.*` / `ranchu*` / `goldfish*` / `ro.boottime.*emulator*`
+  prop. NOTE: `04` extracted names with sed `\|` alternation, which toybox sed
+  does not support, so its `init.svc.*` / `ro.boottime.*` loops matched NOTHING
+  and logged "deleted 0" as success on every boot since the first commit; it now
+  prefilters with `grep -E`. `11-prop-sweep-late.sh` catches the ranchu/goldfish
+  HALs, whose `init.svc.*` props only exist *after* post-fs-data (~30 of them).
+  (`06-bootloader-safe.sh` is referenced in older drafts — it **does not exist**;
+  `01-avd-prop-spoof.sh` sets the bootloader props.)
 
 keymint caches the IDs at startup, so the spoofs must be in place before keymint
 reads them. The boot scripts handle this. **The correct way to apply changes is a
@@ -135,7 +144,17 @@ Apps (and DroidGuard) also read `/proc/cpuinfo`, `/proc/version`,
 - On-device, `post-fs-data.d/07-procbind-safe.sh` bind-mounts the
   `avd-fake/{cpuinfo,version,cmdline,modules}` and `dt_compatible` fakes, and
   `02-avd-deeper-spoof.sh` adds SUSFS `add_open_redirect` for the same `/proc/*`
-  paths (redirect survives in more contexts than a bind mount).
+  paths (redirect survives in more contexts than a bind mount). **This was broken
+  from the first commit until fixed:** `add_open_redirect` takes THREE arguments
+  (`<target> <redirect> <uid_scheme>`); the script passed two, so ksu_susfs
+  printed usage and did nothing while the script logged success.
+- **SELinux caveat on those bind mounts.** A bind mount carries its source label,
+  so `/proc/{cpuinfo,version,modules,cmdline}` end up labelled
+  `u:object_r:adb_data_file:s0`, which app domains cannot read. Observed live as
+  `avc: denied { read } name="cpuinfo" scontext=u:r:gmscore_app` — Play Services
+  could not read `/proc/cpuinfo` at all, which is a louder anomaly than leaking
+  "ranchu" would be. `chcon` to a proc type is refused by policy, so
+  `service.d/13-susfs-late.sh` grants the read via `ksud sepolicy`.
 - `/dev/goldfish_*` nodes are deliberately **left visible** — hiding them breaks
   graphics bringup (`mapper.ranchu` needs `goldfish_address_space`). Only the
   `/dev/qemu_*` nodes are `sus_path`-hidden.
@@ -146,7 +165,11 @@ If `gms.unstable` can see the strings `playintegrityfix`, `zygisk_vector`,
 `rezygisk`, or `tricky_store` in its own `/proc/self/maps`, that alone fails PI.
 
 - `02-avd-deeper-spoof.sh` runs SUSFS `add_sus_map` on each injected `.so`
-  (matching `susfs4ksu/sus_map.txt`).
+  (matching `susfs4ksu/sus_map.txt`). **Verified caveat:** those post-fs-data
+  calls produce ZERO `susfs_add_sus_map` kernel entries — the flag does not
+  register that early — while identical calls after boot register immediately.
+  `service.d/13-susfs-late.sh` re-applies them post-boot and confirms against
+  `dmesg` instead of trusting the exit code.
 - `00-zygisk-sepolicy.sh` applies the SELinux ALLOW rules ReZygisk needs so
   zygote can `dlopen` libzygisk.so from `/data/adb` (without it, zygote gets
   silent EACCES and the Zygisk monitor reports "Zygote crashed").
