@@ -252,22 +252,62 @@ an SDK version at all — while here it returns `sdkVersion: 36`. Combined with
 `appAccessRiskVerdict` being populated only on stack A, Google is simply
 evaluating far more of the request on stack A than on this device.
 
+### Play Protect: checked, and it is NOT the cause (2026-09-23)
+
+The obvious reading of `playProtectVerdict: UNEVALUATED` is "Play Protect is
+off". It is not. On this device:
+
+- **Both** Play Protect switches are already ON ("Scan apps with Play Protect",
+  "Improve harmful app detection").
+- A **fresh scan was run** immediately before the request — "No harmful apps
+  found", "Play Protect scanned moments ago".
+- `package_verifier_user_consent = 1`, `upload_apk_enable = 1`.
+- Play Store -> Settings -> About reports **"Play Protect certification: Device
+  is certified"**.
+
+The response afterwards was **byte-for-byte the same verdict**: still
+`["MEETS_DEVICE_INTEGRITY"]`, still `playProtectVerdict: UNEVALUATED`, still
+`recentDeviceActivity: UNEVALUATED`, still `appLicensingVerdict: UNLICENSED`.
+
+So `UNEVALUATED` here is **Google declining to evaluate**, not a setting we
+failed to enable. Play Protect joins the list of eliminated causes. Every
+device-side control that can be inspected on this AVD is healthy — certified,
+scanned, signed in, checked in — and Google still withholds BASIC and the three
+environment evaluations.
+
 ### What to try next, in order
 
-1. **Turn on Play Protect and let it complete a scan.** `playProtectVerdict:
-   UNEVALUATED` vs `NO_ISSUES` is the single cleanest difference and the most
-   directly actionable. Play Store -> Play Protect -> Scan.
-2. **Install the checker *from the Play Store*** rather than sideloading it, so
-   `appLicensingVerdict` becomes `LICENSED` like stack A. Cheap, and removes a
-   known difference even if licensing does not itself gate BASIC.
-3. **Let the device accumulate activity before judging it.**
+1. **Install the checker *from the Play Store*** rather than sideloading it, so
+   `appLicensingVerdict` becomes `LICENSED` like stack A. This is the last
+   remaining *measurable* difference besides activity level. Low prior — it is an
+   account-level field about app ownership and should not gate device integrity —
+   but it is cheap and it closes the list.
+2. **Let the device accumulate activity before judging it.**
    `recentDeviceActivity: LEVEL_1` vs `UNEVALUATED` suggests stack A's long-lived
-   base has history this fresh AVD does not. If that is the mechanism, *every*
-   verdict measured on a newly created AVD within minutes of first boot is
-   suspect — including much of 2026-09-22. Worth re-testing a config after the
-   device has been signed in and used across a few sessions.
+   base has history this fresh AVD does not (created 2026-09-22 22:59, i.e.
+   hours old). If that is the mechanism, *every* verdict measured on a newly
+   created AVD within minutes of first boot is suspect — including much of
+   2026-09-22, and it would explain why the morning's three green was never
+   reproducible that evening on fresh AVDs. Worth re-testing a config after the
+   device has been signed in and used across several sessions and days.
 
-Only after those three should structural changes be considered again.
+This is now the best-supported hypothesis, by elimination and by the one
+measurement that actually differs in kind (`LEVEL_1` vs `UNEVALUATED`). It also
+predicts something the configuration theories do not: that patience, not
+settings, is what changes the answer.
+
+### Eliminated, with measurements
+
+| # | change | result |
+|---|---|---|
+| 1 | PlayIntegrityFork v18 -> Integrity Box v42 | no change |
+| 2 | tokay -> comet profile + inverted spoof flags | no change |
+| 3 | hide `/system/bin/su` via sus_path | no change |
+| 4 | entire global prop layer disabled (raw emulator props) | no change |
+| 5 | account state (signed in, check-in id present) | not the gap |
+| 6 | Play Protect on + fresh scan + device certified | no change |
+
+Only after these should structural changes be considered again.
 
 ### What that leaves
 
