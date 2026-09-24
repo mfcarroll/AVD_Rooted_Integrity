@@ -48,7 +48,7 @@ RUN for attempt in 1 2 3; do \
         ccache \
         clang lld llvm llvm-dev \
         gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu \
-        gcc-x86-64-linux-gnu binutils-x86-64-linux-gnu \ \
+        gcc-x86-64-linux-gnu binutils-x86-64-linux-gnu \
      && break; \
         echo "apt attempt ${attempt} failed; refreshing the index and retrying"; \
         sleep 15; \
