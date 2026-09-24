@@ -127,6 +127,30 @@ CONFIG_DEFAULT_HOSTNAME="localhost"
 # and a boot loop.
 EOF
 
+# ARM64: keep BTF OFF, explicitly.
+#
+# gki_defconfig asks for CONFIG_DEBUG_INFO_BTF=y, but this image had no pahole
+# until the x86_64 work added dwarves, so the option was silently unselectable
+# and every arm64 kernel built here so far -- including the one in
+# payloads/kernel/ that reaches MEETS_STRONG_INTEGRITY -- was built WITHOUT it.
+#
+# Adding dwarves to the shared image therefore changed arm64 too, unasked: the
+# artifact grew 12.8MB -> 14.8MB and resolve_btfids ran. BTF adds a field to
+# struct module, and whether the AVD's prebuilt modules load depends on that
+# layout matching. Flipping it silently on the stack that works is exactly the
+# wrong trade.
+#
+# So pin it off here and keep CI reproducing the validated kernel. Turning it on
+# for arm64 may well be an improvement -- it is what Google ships -- but that is
+# a deliberate experiment that has to end in a re-measured integrity verdict,
+# not a side effect of an x86_64 fix.
+if [[ "${KERNEL_ARCH}" == "arm64" ]]; then
+    cat >> .config <<'EOF'
+# CONFIG_DEBUG_INFO_BTF is not set
+# CONFIG_DEBUG_INFO_BTF_MODULES is not set
+EOF
+fi
+
 # x86_64 hooks KSU through the indirect syscall table, which the 6.6 syscall
 # hardening replaces with direct branches. patches/x86_64/ restores an indirect
 # path behind X86_FEATURE_INDIRECT_SAFE, selected at runtime with
@@ -266,6 +290,19 @@ if [[ "${KERNEL_ARCH}" == "x86_64" ]]; then
         exit 1
     fi
     echo "==> x86_64 built-in drivers confirmed in .config"
+fi
+
+# The mirror of the above: arm64 must NOT have BTF, or it is no longer the
+# kernel that was validated at 3/3.
+if [[ "${KERNEL_ARCH}" == "arm64" ]]; then
+    if grep -qx 'CONFIG_DEBUG_INFO_BTF=y' .config; then
+        echo "ERROR: BTF is enabled on arm64." >&2
+        echo "       That changes struct module, which is what decides whether the" >&2
+        echo "       AVD's prebuilt modules load. The validated arm64 kernel has it" >&2
+        echo "       off. If enabling it is intended, re-measure integrity first." >&2
+        exit 1
+    fi
+    echo "==> arm64 BTF confirmed off (matches the validated kernel)"
 fi
 
 BOOT_DIR="$(arch_boot_dir)"
