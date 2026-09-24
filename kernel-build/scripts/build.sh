@@ -200,7 +200,12 @@ CONFIG_DMABUF_HEAPS_SYSTEM=y
 # a booted guest with no adb -- indistinguishable from not booting.
 CONFIG_GOLDFISH=y
 CONFIG_GOLDFISH_PIPE=y
-CONFIG_GOLDFISH_SYNC=y
+# No CONFIG_GOLDFISH_SYNC: the symbol does not exist in this tree. Only
+# GOLDFISH_PIPE is in drivers/platform/goldfish/Kconfig; goldfish_sync.ko ships
+# in the system image's VENDOR partition (dlkm_loader loads it from
+# /vendor/lib/modules) and is not AOSP common source, so it cannot be built in
+# from here. It will keep failing to insmod. If the graphics path turns out to
+# need it, virtio_gpu is the alternative and is built in above.
 EOF
 fi
 
@@ -222,7 +227,7 @@ if [[ "${KERNEL_ARCH}" == "x86_64" ]]; then
                CONFIG_VSOCKETS CONFIG_VIRTIO_VSOCKETS \
                CONFIG_DRM CONFIG_DRM_VIRTIO_GPU \
                CONFIG_DMABUF_HEAPS CONFIG_DMABUF_HEAPS_SYSTEM \
-               CONFIG_GOLDFISH_PIPE CONFIG_GOLDFISH_SYNC; do
+               CONFIG_GOLDFISH_PIPE; do
         grep -qx "${sym}=y" .config || _missing+=("$sym")
     done
     if (( ${#_missing[@]} )); then
