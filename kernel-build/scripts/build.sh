@@ -91,8 +91,35 @@ JOBS="${JOBS:-$(nproc)}"
 
 echo "==> Building for ${KERNEL_ARCH} (ARCH=${ARCH}, CROSS_COMPILE=${CROSS_COMPILE})"
 
+# x86_64 starts from Google's OWN kernel-ranchu config, not gki_defconfig.
+#
+# The AVD's graphics stack lives in VENDOR modules -- goldfish_address_space,
+# goldfish_sync, virtio-gpu -- loaded from /vendor/lib/modules. Google's config
+# does not even set CONFIG_GOLDFISH, and has VIRTIO_BLK=m: those modules are
+# built separately against that exact kernel, so they carry its struct module
+# layout and refuse to load into anything else:
+#
+#   .gnu.linkonce.this_module section size must match the kernel's built
+#   struct module size at run time
+#
+# Chasing that field by field did not converge. BTF was one difference and
+# fixing it changed nothing; struct module has a dozen conditional fields and we
+# were guessing at them one build at a time.
+#
+# configs/x86_64-ranchu.config is that kernel's own config, taken from
+# /proc/config.gz on a stock boot of the same android-36 x86_64 image. Same
+# 6.6.66 we build. Starting from it makes ABI agreement the default rather than
+# something to be reverse-engineered, and our KSU/SUSFS options are appended on
+# top -- none of them add fields to struct module.
 echo "==> defconfig"
-make -j "${JOBS}" gki_defconfig
+if [[ "${KERNEL_ARCH}" == "x86_64" ]]; then
+    _ref="${ROOT}/configs/x86_64-ranchu.config"
+    [[ -f "$_ref" ]] || { echo "ERROR: missing ${_ref}" >&2; exit 1; }
+    echo "    base: configs/x86_64-ranchu.config (Google's kernel-ranchu)"
+    cp "$_ref" .config
+else
+    make -j "${JOBS}" gki_defconfig
+fi
 
 # Append config overrides:
 #  - KernelSU + every SUSFS feature
