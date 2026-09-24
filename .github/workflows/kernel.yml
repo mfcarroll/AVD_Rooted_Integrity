@@ -152,9 +152,26 @@ jobs:
           workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
 
+      # Publishes to a BUILD ARTIFACT prefix, deliberately not into
+      # payloads/kernel/. payloads/ is a pinned store: payloads/manifest.tsv
+      # records a sha256 per blob and `payloads.sh verify` enforces it. CI
+      # writing there overwrote the pinned kernel with a different build, so a
+      # `payloads.sh fetch` would have replaced a known-good kernel with an
+      # unvalidated one and then failed its own checksum test.
+      #
+      # Promotion into the payload store stays a deliberate act:
+      #   gcloud storage cp gs://<bucket>/kernels/<arch>/<file> payloads/kernel/
+      #   ./scripts/payloads.sh manifest && ./scripts/payloads.sh push
+      #
+      # gzip: false because the action gzip-encodes by default. On an
+      # already-compressed kernel that buys nothing and sets Content-Encoding,
+      # so the object's stored size no longer matches its content length --
+      # which is exactly what a size-comparing rsync and a byte-count manifest
+      # both rely on.
       - name: Publish kernel to GCS
         if: steps.gate.outputs.run == 'true' && vars.GCP_WORKLOAD_IDENTITY_PROVIDER != ''
         uses: google-github-actions/upload-cloud-storage@v2
         with:
           path: ${{ steps.out.outputs.path }}
-          destination: ${{ vars.GCS_BUCKET }}/payloads/kernel
+          destination: ${{ vars.GCS_BUCKET }}/kernels/${{ matrix.arch }}
+          gzip: false
