@@ -219,8 +219,13 @@ if [[ "${KERNEL_ARCH}" == "x86_64" ]]; then
     # drivers are built in. Check the options that change struct module layout
     # and are the reason those modules load at all.
     _missing=()
+    # NOT CONFIG_MODULE_SCMVERSION, though Google's config sets it: the symbol
+    # is defined in no Kconfig in this tree, and struct module carries
+    # `const char *scmversion` UNCONDITIONALLY (include/linux/module.h:422, no
+    # ifdef). It controls whether a build stamp is populated, not the layout --
+    # which is why the modules already loaded without it.
     for sym in CONFIG_DEBUG_INFO_BTF CONFIG_DEBUG_INFO_BTF_MODULES \
-               CONFIG_MODULE_SCMVERSION CONFIG_MODULE_UNLOAD \
+               CONFIG_MODULE_UNLOAD \
                CONFIG_KSU CONFIG_KSU_SUSFS; do
         grep -qx "${sym}=y" .config || _missing+=("$sym")
     done
