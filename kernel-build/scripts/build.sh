@@ -53,6 +53,40 @@ export OBJCOPY=llvm-objcopy
 export OBJDUMP=llvm-objdump
 export STRIP=llvm-strip
 
+# Pin the identity stamped into the kernel banner.
+#
+# Two reasons. Reproducibility: without these the banner carries the build host
+# and wall-clock time, so two CI runs of the SAME commit produce different bytes
+# and the images cannot be compared. Measured: two runs of one commit differed
+# by ~40 KB after gzip amplified the change.
+#
+# And disclosure: the default reads `root@<docker-container-id>`, e.g.
+# root@29806e91e7ad. This kernel is the centrepiece of an anti-detection stack;
+# announcing that it was built as root inside a container works against that.
+# build-user@build-host is what real AOSP GKI release kernels report.
+#
+# The timestamp comes from the pinned kernel tag's own commit date, so it is
+# deterministic for a given KERNEL_TAG and still a plausible build date --
+# rather than a hardcoded lie that drifts further from the source every release.
+export KBUILD_BUILD_USER="${KBUILD_BUILD_USER:-build-user}"
+export KBUILD_BUILD_HOST="${KBUILD_BUILD_HOST:-build-host}"
+if [[ -z "${KBUILD_BUILD_TIMESTAMP:-}" ]]; then
+    # format-local + TZ=UTC so the stamp does not depend on the builder's
+    # timezone, and UTC is spelled literally: git's %Z renders empty here, which
+    # left a double space where the zone belongs.
+    KBUILD_BUILD_TIMESTAMP=$(TZ=UTC git -C "${KERNEL_DIR}" log -1 \
+        --format=%cd --date=format-local:'%a %b %e %T UTC %Y' 2>/dev/null || true)
+    # A source tree with no git metadata must not silently fall back to "now" --
+    # that is exactly the non-determinism this block exists to remove.
+    if [[ -z "${KBUILD_BUILD_TIMESTAMP}" ]]; then
+        echo "ERROR: cannot derive a deterministic build timestamp from ${KERNEL_DIR}." >&2
+        echo "       Set KBUILD_BUILD_TIMESTAMP explicitly to build anyway." >&2
+        exit 1
+    fi
+    export KBUILD_BUILD_TIMESTAMP
+fi
+echo "==> banner identity: ${KBUILD_BUILD_USER}@${KBUILD_BUILD_HOST}, ${KBUILD_BUILD_TIMESTAMP}"
+
 JOBS="${JOBS:-$(nproc)}"
 
 echo "==> Building for ${KERNEL_ARCH} (ARCH=${ARCH}, CROSS_COMPILE=${CROSS_COMPILE})"
