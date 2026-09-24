@@ -179,7 +179,21 @@ CONFIG_VIRTIO_BALLOON=y
 CONFIG_VIRTIO_VSOCKETS=y
 CONFIG_VIRTIO_VSOCKETS_COMMON=y
 CONFIG_VSOCKETS=y
+CONFIG_VIRTIO_PMEM=y
+CONFIG_FAILOVER=y
+CONFIG_NET_FAILOVER=y
 CONFIG_HW_RANDOM_VIRTIO=y
+
+# Graphics. The first attempt covered only the block path, which got the guest
+# all the way into Android userspace -- and then surfaceflinger SIGABRTed every
+# five seconds, 185 times, because virtio_gpu was still a module and still
+# rejected. No display driver, no compositor, black screen, and from outside it
+# looks identical to not booting at all.
+CONFIG_DRM=y
+CONFIG_DRM_VIRTIO_GPU=y
+CONFIG_DRM_FBDEV_EMULATION=y
+CONFIG_DMABUF_HEAPS=y
+CONFIG_DMABUF_HEAPS_SYSTEM=y
 
 # The emulator's host-guest channels. /dev/goldfish_pipe and goldfish_sync are
 # what adb and qemud ride on, so losing them to the same rejection would leave
@@ -197,9 +211,18 @@ make -j "${JOBS}" olddefconfig
 # costs a full rebuild plus a boot to discover the identical panic, so check
 # what actually landed.
 if [[ "${KERNEL_ARCH}" == "x86_64" ]]; then
+    # Check EVERY symbol this branch sets, not a hand-picked few. The first
+    # version listed five, all block-path, and passed -- while VIRTIO_NET,
+    # VIRTIO_CONSOLE, VSOCKETS and the whole graphics stack were quietly absent.
+    # A partial check is worse than none: it reads as confirmation.
     _missing=()
     for sym in CONFIG_VIRTIO CONFIG_VIRTIO_PCI CONFIG_VIRTIO_BLK \
-               CONFIG_VIRTIO_DMA_SHARED_BUFFER CONFIG_GOLDFISH_PIPE; do
+               CONFIG_VIRTIO_DMA_SHARED_BUFFER CONFIG_VIRTIO_NET \
+               CONFIG_VIRTIO_CONSOLE CONFIG_VIRTIO_INPUT CONFIG_VIRTIO_PMEM \
+               CONFIG_VSOCKETS CONFIG_VIRTIO_VSOCKETS \
+               CONFIG_DRM CONFIG_DRM_VIRTIO_GPU \
+               CONFIG_DMABUF_HEAPS CONFIG_DMABUF_HEAPS_SYSTEM \
+               CONFIG_GOLDFISH_PIPE CONFIG_GOLDFISH_SYNC; do
         grep -qx "${sym}=y" .config || _missing+=("$sym")
     done
     if (( ${#_missing[@]} )); then
@@ -207,8 +230,10 @@ if [[ "${KERNEL_ARCH}" == "x86_64" ]]; then
         for sym in "${_missing[@]}"; do
             printf '       %s -> %s\n' "$sym" "$(grep -E "^(# )?${sym}[ =]" .config || echo 'absent')" >&2
         done
-        echo "       Without them the guest has no block devices and init panics" >&2
-        echo "       at first-stage mount. Check each symbol's dependencies." >&2
+        echo "       Each of these is a driver the prebuilt module cannot supply:" >&2
+        echo "       block ones panic init at first-stage mount, graphics ones let" >&2
+        echo "       the guest boot and then crash-loop surfaceflinger on a black" >&2
+        echo "       screen. Check each symbol's dependencies." >&2
         exit 1
     fi
     echo "==> x86_64 built-in drivers confirmed in .config"
