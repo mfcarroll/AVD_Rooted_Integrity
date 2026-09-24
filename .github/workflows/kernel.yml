@@ -114,10 +114,19 @@ jobs:
           # then reports as untracked. The suffix also records WHICH kernel this is,
           # which matters once there is more than one.
           pub="$img-android15-6.6-ksu-susfs"
-          cp -f "out/$img" "out/$pub"
 
-          echo "img=$img"  >> "$GITHUB_OUTPUT"
-          echo "pub=$pub"  >> "$GITHUB_OUTPUT"
+          # Stage the rename OUTSIDE out/. The container writes out/ as root
+          # through the bind mount, so the directory is root-owned on the host
+          # and the runner user cannot create files in it -- `cp` into out/
+          # fails with EACCES. Reading from out/ is fine, which is why this only
+          # showed up once the workflow started writing there.
+          stage="$RUNNER_TEMP/dist"
+          mkdir -p "$stage"
+          cp -f "out/$img" "$stage/$pub"
+
+          echo "img=$img"        >> "$GITHUB_OUTPUT"
+          echo "pub=$pub"        >> "$GITHUB_OUTPUT"
+          echo "path=$stage/$pub" >> "$GITHUB_OUTPUT"
           {
             echo "### ${{ matrix.arch }} — \`$pub\` ($(du -h "out/$img" | cut -f1))"
             echo '```'
@@ -130,7 +139,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: kernel-${{ matrix.arch }}
-          path: kernel-build/out/${{ steps.out.outputs.pub }}
+          path: ${{ steps.out.outputs.path }}
           if-no-files-found: error
 
       # ---- Publish to GCS -------------------------------------------------
@@ -147,5 +156,5 @@ jobs:
         if: steps.gate.outputs.run == 'true' && vars.GCP_WORKLOAD_IDENTITY_PROVIDER != ''
         uses: google-github-actions/upload-cloud-storage@v2
         with:
-          path: kernel-build/out/${{ steps.out.outputs.pub }}
+          path: ${{ steps.out.outputs.path }}
           destination: ${{ vars.GCS_BUCKET }}/payloads/kernel
