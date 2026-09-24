@@ -1,12 +1,13 @@
 # CI — kernel builds
 
-`.github/workflows/kernel.yml` builds the custom GKI kernel for both target
-arches and publishes the images.
+`.github/workflows/kernel.yml` builds the custom GKI kernel and publishes the
+images.
 
 | | |
 |---|---|
 | Trigger | `workflow_dispatch` (pick `both` / `arm64` / `x86_64`), or a push touching `kernel-build/**` |
-| Runner | `ubuntu-latest`, one job per arch, `fail-fast: false` |
+| Matrix | chosen per push by `.github/scripts/select-arches.sh` — see below |
+| Runner | `ubuntu-latest`, one job per selected arch, `fail-fast: false` |
 | Build | the same `kernel-build/Dockerfile` and `./scripts/build-all.sh --arch <a>` used locally |
 | Output | `Image.gz` (arm64), `bzImage` (x86_64) |
 | Always | uploaded as a run artifact (`kernel-<arch>`) |
@@ -14,6 +15,32 @@ arches and publishes the images.
 
 Both builds are cross-compiles, so one `ubuntu-latest` runner and one container
 image cover both — no self-hosted arm64 runner is needed.
+
+## Which arches a push builds
+
+A push used to build both every time, which is 25–75 runner-minutes. A `select`
+job now diffs `github.event.before..github.sha` and narrows the matrix.
+
+**Narrowing requires positive evidence, and the only evidence accepted is an arch
+name in the path** — `patches/<arch>/`, `configs/<arch>-*.config`,
+`scripts/*-<arch>.sh`. Everything else that is a build input builds both: a
+shared script, the `Dockerfile`, the workflow itself, and any range that cannot
+be diffed (a new branch, or history rewritten out from under the run). Markdown
+is dropped by the path filter before the workflow starts and ignored again here,
+so a doc in a mixed commit never widens the matrix.
+
+It errs that way on purpose. A wrong "both" costs minutes; a wrong "one arch"
+publishes a kernel nobody compiled, and that hides until a device fails to boot.
+
+The classifier reads paths, so renaming or moving a file under `kernel-build/`
+can silently reclassify it. There is a test for exactly that:
+
+```bash
+./.github/scripts/select-arches.test.sh
+```
+
+In practice most commits still build both, because nearly everything routes
+through `scripts/build.sh`. The saving is on config- and patch-only work.
 
 Two things the runner needs that a local build does not:
 

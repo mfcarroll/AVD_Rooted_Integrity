@@ -1,8 +1,13 @@
 # Build the custom GKI kernel (KernelSU-Next + SUSFS + anti-emulator patches)
-# for both target arches and publish the images.
+# and publish the images.
 #
 # Both builds are cross-compiles driven by scripts/build-all.sh --arch <a>, so
 # they run on the same ubuntu-latest runner and in the same container image.
+#
+# The matrix is chosen per push by scripts/select-arches.sh rather than fixed at
+# both: a change confined to one arch's config or patches only builds that arch.
+# Narrowing needs positive evidence and everything else builds both -- see that
+# script for why it errs that way.
 #
 # The GCS publish step is inert until Workload Identity Federation is
 # configured: it is skipped unless the GCP_WORKLOAD_IDENTITY_PROVIDER repo
@@ -15,7 +20,7 @@ on:
   workflow_dispatch:
     inputs:
       arch:
-        description: Which arch to build
+        description: Which arch to build (a push decides this for itself)
         type: choice
         default: both
         options: [both, arm64, x86_64]
@@ -23,12 +28,12 @@ on:
     paths:
       - 'kernel-build/**'
       - '.github/workflows/kernel.yml'
-      # A two-arch kernel build is 30-60 min of runner time. Editing
-      # kernel-build/README.md used to buy one, because it sits under
-      # kernel-build/**. Exclusion patterns are evaluated in order and the last
-      # match for a file wins, so these must come after the includes above.
-      # A commit touching a doc AND a script still builds: the workflow runs if
-      # ANY changed file ends up included.
+      - '.github/scripts/select-arches.sh'
+      # A kernel build is 30-60 min of runner time. Editing kernel-build/README.md
+      # used to buy one, because it sits under kernel-build/**. Exclusion patterns
+      # are evaluated in order and the last match for a file wins, so this must
+      # stay below every include above. A commit touching a doc AND a script still
+      # builds: the workflow runs if ANY changed file ends up included.
       - '!**.md'
 
 # A kernel build is ~30-60 min; don't stack them up on a busy branch.
@@ -41,31 +46,52 @@ permissions:
   id-token: write        # required for Workload Identity Federation
 
 jobs:
+  # One short job that picks the matrix. It replaces a per-arch gate step, which
+  # still had to start a runner and check out the tree before it could decide to
+  # do nothing -- a whole billed job to skip a build.
+  select:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      arches: ${{ steps.pick.outputs.arches }}
+    steps:
+      # Full history: a push can span several commits, so the diff needs the
+      # commit github.event.before points at, which a shallow clone will not have.
+      # The repo is under 1 MB, so this costs nothing.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - id: pick
+        env:
+          WANT: ${{ github.event.inputs.arch }}
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.sha }}
+        run: |
+          out=$(./.github/scripts/select-arches.sh)
+          echo "$out" >> "$GITHUB_OUTPUT"
+          arches=$(sed -n 's/^arches=//p' <<< "$out")
+          why=$(sed -n 's/^why=//p' <<< "$out")
+          echo "::notice::building ${arches} — ${why}"
+          {
+            echo "### Building \`${arches}\`"
+            echo "${why}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
   build:
+    needs: select
     runs-on: ubuntu-latest
     timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:
-        arch: [arm64, x86_64]
+        arch: ${{ fromJSON(needs.select.outputs.arches) }}
     steps:
       - uses: actions/checkout@v4
-
-      - name: Skip arches not requested
-        id: gate
-        run: |
-          want='${{ github.event.inputs.arch || 'both' }}'
-          if [[ "$want" == "both" || "$want" == "${{ matrix.arch }}" ]]; then
-            echo "run=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "run=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::${{ matrix.arch }} not requested ($want); skipping."
-          fi
 
       # The AOSP common-kernel clone is ~3 GB and the build tree is ~10 GB more.
       # A stock ubuntu-latest runner does not have room for both without this.
       - name: Reclaim runner disk
-        if: steps.gate.outputs.run == 'true'
         run: |
           df -h /
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
@@ -74,7 +100,6 @@ jobs:
           df -h /
 
       - name: Restore ccache
-        if: steps.gate.outputs.run == 'true'
         uses: actions/cache@v4
         with:
           path: kernel-build/.ccache
@@ -83,7 +108,6 @@ jobs:
             ccache-${{ matrix.arch }}-
 
       - name: Build container image
-        if: steps.gate.outputs.run == 'true'
         working-directory: kernel-build
         run: docker build -t kbuild .
 
@@ -92,7 +116,6 @@ jobs:
       # collide on a case-insensitive filesystem). Keeping CI identical means a
       # CI failure reproduces locally with the same command.
       - name: Build kernel (${{ matrix.arch }})
-        if: steps.gate.outputs.run == 'true'
         working-directory: kernel-build
         run: |
           docker volume create kbuild-sources
@@ -103,7 +126,6 @@ jobs:
             ./scripts/build-all.sh --arch ${{ matrix.arch }}
 
       - name: Identify output
-        if: steps.gate.outputs.run == 'true'
         id: out
         working-directory: kernel-build
         run: |
@@ -142,7 +164,6 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload kernel artifact
-        if: steps.gate.outputs.run == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: kernel-${{ matrix.arch }}
@@ -153,7 +174,7 @@ jobs:
       # Skipped entirely until WIF is configured. Keyless: no service-account
       # JSON in the repo. See docs/CI.md.
       - name: Authenticate to Google Cloud
-        if: steps.gate.outputs.run == 'true' && vars.GCP_WORKLOAD_IDENTITY_PROVIDER != ''
+        if: vars.GCP_WORKLOAD_IDENTITY_PROVIDER != ''
         uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
@@ -176,7 +197,7 @@ jobs:
       # which is exactly what a size-comparing rsync and a byte-count manifest
       # both rely on.
       - name: Publish kernel to GCS
-        if: steps.gate.outputs.run == 'true' && vars.GCP_WORKLOAD_IDENTITY_PROVIDER != ''
+        if: vars.GCP_WORKLOAD_IDENTITY_PROVIDER != ''
         uses: google-github-actions/upload-cloud-storage@v2
         with:
           path: ${{ steps.out.outputs.path }}
