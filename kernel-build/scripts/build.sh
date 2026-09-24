@@ -189,11 +189,35 @@ CONFIG_HW_RANDOM_VIRTIO=y
 # five seconds, 185 times, because virtio_gpu was still a module and still
 # rejected. No display driver, no compositor, black screen, and from outside it
 # looks identical to not booting at all.
-CONFIG_DRM=y
-CONFIG_DRM_VIRTIO_GPU=y
-CONFIG_DRM_FBDEV_EMULATION=y
 CONFIG_DMABUF_HEAPS=y
 CONFIG_DMABUF_HEAPS_SYSTEM=y
+
+# Match Google's struct module layout, so the AVD's own vendor modules load.
+#
+# This is the root cause under every rejection so far, not another workaround.
+# The x86_64 AVD's graphics stack needs goldfish_address_space (the gfxstream
+# ASG device at PCI 607d:f153) and goldfish_sync. Neither exists in AOSP common
+# -- drivers/platform/goldfish/Kconfig defines only GOLDFISH_PIPE -- so they can
+# only come from the vendor partition, and those .ko files are refused with
+#
+#   .gnu.linkonce.this_module section size must match the kernel's built
+#   struct module size at run time
+#
+# Google's kernel-ranchu, pulled from /proc/config.gz on a stock boot, is the
+# same 6.6.66 we build and sets CONFIG_DEBUG_INFO_BTF=y plus
+# CONFIG_DEBUG_INFO_BTF_MODULES=y. Those add a field to struct module. BTF needs
+# pahole (PAHOLE_VERSION >= 116); our image had no dwarves package, so the
+# option was silently unselectable and olddefconfig dropped it, leaving our
+# struct module a field short of every module in the image.
+#
+# x86_64 ONLY. The arm64 kernel currently loads the AVD's prebuilt modules, so
+# changing its struct module layout risks breaking a stack that reaches
+# MEETS_STRONG_INTEGRITY today. Do not lift this into the shared block without
+# re-measuring arm64.
+CONFIG_DEBUG_INFO=y
+CONFIG_DEBUG_INFO_BTF=y
+CONFIG_DEBUG_INFO_BTF_MODULES=y
+CONFIG_MODULE_SCMVERSION=y
 
 # The emulator's host-guest channels. /dev/goldfish_pipe and goldfish_sync are
 # what adb and qemud ride on, so losing them to the same rejection would leave
@@ -225,8 +249,8 @@ if [[ "${KERNEL_ARCH}" == "x86_64" ]]; then
                CONFIG_VIRTIO_DMA_SHARED_BUFFER CONFIG_VIRTIO_NET \
                CONFIG_VIRTIO_CONSOLE CONFIG_VIRTIO_INPUT CONFIG_VIRTIO_PMEM \
                CONFIG_VSOCKETS CONFIG_VIRTIO_VSOCKETS \
-               CONFIG_DRM CONFIG_DRM_VIRTIO_GPU \
                CONFIG_DMABUF_HEAPS CONFIG_DMABUF_HEAPS_SYSTEM \
+               CONFIG_DEBUG_INFO_BTF CONFIG_DEBUG_INFO_BTF_MODULES \
                CONFIG_GOLDFISH_PIPE; do
         grep -qx "${sym}=y" .config || _missing+=("$sym")
     done

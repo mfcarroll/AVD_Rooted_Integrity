@@ -21,6 +21,11 @@ ENV LANG=C.UTF-8
 # 6.6 builds cleanly with clang-18 (the official prebuilts/clang/host/linux-x86
 # tag clang-r522817 IS clang-18.0.x).
 #
+# dwarves provides pahole, which CONFIG_DEBUG_INFO_BTF requires
+# (PAHOLE_VERSION >= 116). Without it that option is silently unselectable, BTF
+# is dropped, and struct module loses a field -- which is precisely why the
+# AVD's prebuilt x86_64 modules refuse to load into our kernel.
+#
 # When CC=clang LLVM=1 LLVM_IAS=1, the kernel uses clang for compilation,
 # integrated assembler, ld.lld for linking, llvm-objcopy etc. We still need
 # binutils-<target>-linux-gnu for a couple of helpers (mkimage, objtool, etc).
@@ -46,6 +51,7 @@ RUN for attempt in 1 2 3; do \
         device-tree-compiler \
         zstd lz4 \
         ccache \
+        dwarves \
         clang lld llvm llvm-dev \
         gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu \
         gcc-x86-64-linux-gnu binutils-x86-64-linux-gnu \
