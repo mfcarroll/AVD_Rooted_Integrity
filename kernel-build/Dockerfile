@@ -24,7 +24,20 @@ ENV LANG=C.UTF-8
 # When CC=clang LLVM=1 LLVM_IAS=1, the kernel uses clang for compilation,
 # integrated assembler, ld.lld for linking, llvm-objcopy etc. We still need
 # binutils-<target>-linux-gnu for a couple of helpers (mkimage, objtool, etc).
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# Retry the whole update+install cycle.
+#
+# Ubuntu publishes a security update, drops the superseded .deb from the pool,
+# and any index fetched moments earlier now points at a file that 404s:
+#
+#   E: Failed to fetch .../libexpat1_2.6.1-2ubuntu0.6_amd64.deb  404  Not Found
+#
+# It is a race against the archive, not a problem with this image, and it takes
+# out every build until someone re-runs. Re-running `apt-get update` picks up
+# the new index, so retry rather than pin: pinning would just move the failure
+# to whenever that pin goes stale.
+RUN for attempt in 1 2 3; do \
+        apt-get update -o Acquire::Retries=5 \
+     && apt-get install -y --no-install-recommends -o Acquire::Retries=5 \
         ca-certificates curl wget git xz-utils unzip \
         build-essential bc bison flex \
         libssl-dev openssl libelf-dev \
@@ -35,7 +48,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ccache \
         clang lld llvm llvm-dev \
         gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu \
-        gcc-x86-64-linux-gnu binutils-x86-64-linux-gnu \
+        gcc-x86-64-linux-gnu binutils-x86-64-linux-gnu \ \
+     && break; \
+        echo "apt attempt ${attempt} failed; refreshing the index and retrying"; \
+        sleep 15; \
+        [ "${attempt}" = 3 ] && exit 1; \
+    done \
     && rm -rf /var/lib/apt/lists/* \
     && clang --version \
     && ld.lld --version
