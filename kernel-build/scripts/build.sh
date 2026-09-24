@@ -186,103 +186,27 @@ fi
 if [[ "${KERNEL_ARCH}" == "x86_64" ]]; then
     cat >> .config <<'EOF'
 # CONFIG_KSU_X86_PATCH_SYSCALL_DISPATCHER is not set
-
-# Build the virtio drivers IN, rather than relying on the system image's
-# prebuilt /lib/modules/*.ko.
-#
-# The comment above says we deliberately leave these as =m so the AVD's
-# prebuilt modules load, with Wild's vermagic bypass covering the version
-# mismatch. That holds on arm64. It does NOT hold on x86_64, where every
-# module is rejected before vermagic is even consulted:
-#
-#   module virtio_dma_buf: .gnu.linkonce.this_module section size must match
-#                          the kernel's built struct module size at run time
-#   init: Failed to insmod '/lib/modules/virtio_dma_buf.ko': Exec format error
-#   init: partition(s) not found after polling timeout: metadata, super, vbmeta
-#   init: Failed to create devices required for first stage mount
-#   Kernel panic - not syncing: Attempted to kill init!
-#
-# That is a struct-size check, not the vermagic check, so the bypass does
-# nothing for it. No virtio block driver means no metadata/super/vbmeta, so
-# first-stage mount fails and init dies -- then the emulator reboots and does
-# it again, which is why adb only ever reports `offline`.
-#
-# Patching out the size check would be wrong: unlike vermagic it is
-# load-bearing, and ignoring it lets the kernel misread the module's own
-# struct and corrupt memory.
-#
-# The old worry about forcing =y was that init's insmod would then fail with
-# "Device or resource busy" and panic. The boot log above disproves it: init
-# logged the insmod failure, said "LoadWithAliases was unable to load
-# virtio_dma_buf", and carried on regardless. It panicked ten seconds later
-# for want of block devices, not for the failed insmod. A built-in driver
-# whose insmod returns EEXIST lands in exactly that tolerated path, with the
-# device actually present.
-CONFIG_VIRTIO=y
-CONFIG_VIRTIO_PCI=y
-CONFIG_VIRTIO_PCI_LEGACY=y
-CONFIG_VIRTIO_BLK=y
-CONFIG_VIRTIO_DMA_SHARED_BUFFER=y
-CONFIG_VIRTIO_NET=y
-CONFIG_VIRTIO_CONSOLE=y
-CONFIG_VIRTIO_INPUT=y
-CONFIG_VIRTIO_BALLOON=y
-CONFIG_VIRTIO_VSOCKETS=y
-CONFIG_VIRTIO_VSOCKETS_COMMON=y
-CONFIG_VSOCKETS=y
-CONFIG_VIRTIO_PMEM=y
-CONFIG_FAILOVER=y
-CONFIG_NET_FAILOVER=y
-CONFIG_HW_RANDOM_VIRTIO=y
-
-# Graphics. The first attempt covered only the block path, which got the guest
-# all the way into Android userspace -- and then surfaceflinger SIGABRTed every
-# five seconds, 185 times, because virtio_gpu was still a module and still
-# rejected. No display driver, no compositor, black screen, and from outside it
-# looks identical to not booting at all.
-CONFIG_DMABUF_HEAPS=y
-CONFIG_DMABUF_HEAPS_SYSTEM=y
-
-# Match Google's struct module layout, so the AVD's own vendor modules load.
-#
-# This is the root cause under every rejection so far, not another workaround.
-# The x86_64 AVD's graphics stack needs goldfish_address_space (the gfxstream
-# ASG device at PCI 607d:f153) and goldfish_sync. Neither exists in AOSP common
-# -- drivers/platform/goldfish/Kconfig defines only GOLDFISH_PIPE -- so they can
-# only come from the vendor partition, and those .ko files are refused with
-#
-#   .gnu.linkonce.this_module section size must match the kernel's built
-#   struct module size at run time
-#
-# Google's kernel-ranchu, pulled from /proc/config.gz on a stock boot, is the
-# same 6.6.66 we build and sets CONFIG_DEBUG_INFO_BTF=y plus
-# CONFIG_DEBUG_INFO_BTF_MODULES=y. Those add a field to struct module. BTF needs
-# pahole (PAHOLE_VERSION >= 116); our image had no dwarves package, so the
-# option was silently unselectable and olddefconfig dropped it, leaving our
-# struct module a field short of every module in the image.
-#
-# x86_64 ONLY. The arm64 kernel currently loads the AVD's prebuilt modules, so
-# changing its struct module layout risks breaking a stack that reaches
-# MEETS_STRONG_INTEGRITY today. Do not lift this into the shared block without
-# re-measuring arm64.
-CONFIG_DEBUG_INFO=y
-CONFIG_DEBUG_INFO_BTF=y
-CONFIG_DEBUG_INFO_BTF_MODULES=y
-CONFIG_MODULE_SCMVERSION=y
-
-# The emulator's host-guest channels. /dev/goldfish_pipe and goldfish_sync are
-# what adb and qemud ride on, so losing them to the same rejection would leave
-# a booted guest with no adb -- indistinguishable from not booting.
-CONFIG_GOLDFISH=y
-CONFIG_GOLDFISH_PIPE=y
-# No CONFIG_GOLDFISH_SYNC: the symbol does not exist in this tree. Only
-# GOLDFISH_PIPE is in drivers/platform/goldfish/Kconfig; goldfish_sync.ko ships
-# in the system image's VENDOR partition (dlkm_loader loads it from
-# /vendor/lib/modules) and is not AOSP common source, so it cannot be built in
-# from here. It will keep failing to insmod. If the graphics path turns out to
-# need it, virtio_gpu is the alternative and is built in above.
 EOF
 fi
+
+# Nothing is forced built-in here, deliberately.
+#
+# Earlier revisions built virtio and goldfish drivers in to work around the
+# struct module mismatch. Basing this config on Google's kernel-ranchu removed
+# that mismatch, and the built-ins then became the problem: the vendor
+# goldfish_pipe.ko could not load because our AOSP-common one already held the
+# device --
+#
+#   Failed to insmod '/vendor/lib/modules/goldfish_pipe.ko': Device or resource busy
+#
+# -- and goldfish_address_space is built against the VENDOR goldfish_pipe, not
+# ours. Google's config sets no CONFIG_GOLDFISH at all and ships virtio as
+# modules; the vendor DLKMs are meant to be the whole story.
+#
+# So match that and let them load. If a driver is missing, the fix is to find
+# out why its module was rejected, not to build a different version of it in
+# alongside.
+
 
 make -j "${JOBS}" olddefconfig
 
@@ -291,32 +215,35 @@ make -j "${JOBS}" olddefconfig
 # costs a full rebuild plus a boot to discover the identical panic, so check
 # what actually landed.
 if [[ "${KERNEL_ARCH}" == "x86_64" ]]; then
-    # Check EVERY symbol this branch sets, not a hand-picked few. The first
-    # version listed five, all block-path, and passed -- while VIRTIO_NET,
-    # VIRTIO_CONSOLE, VSOCKETS and the whole graphics stack were quietly absent.
-    # A partial check is worse than none: it reads as confirmation.
+    # What matters now is ABI agreement with the vendor modules, not which
+    # drivers are built in. Check the options that change struct module layout
+    # and are the reason those modules load at all.
     _missing=()
-    for sym in CONFIG_VIRTIO CONFIG_VIRTIO_PCI CONFIG_VIRTIO_BLK \
-               CONFIG_VIRTIO_DMA_SHARED_BUFFER CONFIG_VIRTIO_NET \
-               CONFIG_VIRTIO_CONSOLE CONFIG_VIRTIO_INPUT CONFIG_VIRTIO_PMEM \
-               CONFIG_VSOCKETS CONFIG_VIRTIO_VSOCKETS \
-               CONFIG_DMABUF_HEAPS CONFIG_DMABUF_HEAPS_SYSTEM \
-               CONFIG_DEBUG_INFO_BTF CONFIG_DEBUG_INFO_BTF_MODULES \
-               CONFIG_GOLDFISH_PIPE; do
+    for sym in CONFIG_DEBUG_INFO_BTF CONFIG_DEBUG_INFO_BTF_MODULES \
+               CONFIG_MODULE_SCMVERSION CONFIG_MODULE_UNLOAD \
+               CONFIG_KSU CONFIG_KSU_SUSFS; do
         grep -qx "${sym}=y" .config || _missing+=("$sym")
     done
     if (( ${#_missing[@]} )); then
-        echo "ERROR: these did not survive olddefconfig as built-in:" >&2
+        echo "ERROR: these are not =y in the x86_64 .config:" >&2
         for sym in "${_missing[@]}"; do
             printf '       %s -> %s\n' "$sym" "$(grep -E "^(# )?${sym}[ =]" .config || echo 'absent')" >&2
         done
-        echo "       Each of these is a driver the prebuilt module cannot supply:" >&2
-        echo "       block ones panic init at first-stage mount, graphics ones let" >&2
-        echo "       the guest boot and then crash-loop surfaceflinger on a black" >&2
-        echo "       screen. Check each symbol's dependencies." >&2
+        echo "       The BTF and MODULE_* ones change struct module layout; losing" >&2
+        echo "       them means the AVD's vendor modules stop loading and the guest" >&2
+        echo "       boots to a black screen with surfaceflinger crash-looping." >&2
         exit 1
     fi
-    echo "==> x86_64 built-in drivers confirmed in .config"
+    # And the inverse: building goldfish in shadows the vendor module, which is
+    # what goldfish_address_space is actually linked against.
+    if grep -qx 'CONFIG_GOLDFISH_PIPE=y' .config; then
+        echo "ERROR: goldfish_pipe is built in." >&2
+        echo "       The vendor goldfish_pipe.ko then fails with 'Device or resource" >&2
+        echo "       busy' and goldfish_address_space, which is built against IT," >&2
+        echo "       gets the wrong driver. Google's config sets no CONFIG_GOLDFISH." >&2
+        exit 1
+    fi
+    echo "==> x86_64 module ABI options confirmed (BTF on, goldfish not built in)"
 fi
 
 # The mirror of the above: arm64 must NOT have BTF, or it is no longer the
