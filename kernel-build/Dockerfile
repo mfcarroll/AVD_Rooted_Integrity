@@ -3,9 +3,13 @@
 # matches the AOSP prebuilt clang-r522817's version and works natively on
 # Apple Silicon (no Rosetta needed).
 #
+# Both target arches are CROSS-compiled, so this one image builds either and
+# the host architecture does not matter. Both toolchains are installed.
+#
 # To use:
 #   docker build -t kbuild .
 #   docker run --rm -v "$PWD":/work -w /work kbuild ./scripts/build-all.sh
+#   docker run --rm -v "$PWD":/work -w /work kbuild ./scripts/build-all.sh --arch x86_64
 
 FROM ubuntu:24.04
 
@@ -19,7 +23,7 @@ ENV LANG=C.UTF-8
 #
 # When CC=clang LLVM=1 LLVM_IAS=1, the kernel uses clang for compilation,
 # integrated assembler, ld.lld for linking, llvm-objcopy etc. We still need
-# binutils-aarch64-linux-gnu for a couple of helpers (mkimage, objtool, etc).
+# binutils-<target>-linux-gnu for a couple of helpers (mkimage, objtool, etc).
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates curl wget git xz-utils unzip \
         build-essential bc bison flex \
@@ -31,6 +35,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ccache \
         clang lld llvm llvm-dev \
         gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu \
+        gcc-x86-64-linux-gnu binutils-x86-64-linux-gnu \
     && rm -rf /var/lib/apt/lists/* \
     && clang --version \
     && ld.lld --version

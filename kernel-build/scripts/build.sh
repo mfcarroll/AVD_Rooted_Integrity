@@ -1,6 +1,8 @@
 #!/bin/bash
 # Build the AOSP common-android15-6.6 kernel with our patches applied.
-# Output: sources/kernel/arch/arm64/boot/Image.gz
+#
+#   ./scripts/build.sh              # arm64 (default) -> out/Image, out/Image.gz
+#   ./scripts/build.sh --arch x86_64  #              -> out/bzImage
 #
 # Re-run safe: incremental builds work via ccache.
 
@@ -9,8 +11,26 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 KERNEL_DIR="${ROOT}/sources/kernel"
 
-if [[ ! -f "${KERNEL_DIR}/.avd-patches-applied" ]]; then
+. "${ROOT}/scripts/arch-env.sh"
+arch_parse "$@"
+
+MARKER="${KERNEL_DIR}/$(arch_marker_file)"
+if [[ ! -f "${MARKER}" ]]; then
     echo "ERROR: patches not yet applied. Run scripts/apply-patches.sh first." >&2
+    exit 1
+fi
+
+# The marker carries the arch the tree was patched for. Refuse a mismatch
+# instead of producing a kernel that boots but has no working root.
+patched_arch="$(cat "${MARKER}" 2>/dev/null || true)"
+patched_arch="${patched_arch:-arm64}"   # markers written before this check
+if [[ "${patched_arch}" != "${KERNEL_ARCH}" ]]; then
+    cat >&2 <<EOF
+ERROR: source tree is patched for '${patched_arch}' but you asked for '${KERNEL_ARCH}'.
+       The arches apply different patch sets, so this would silently build a
+       kernel missing its arch-specific fixes. Re-patch first:
+           ./scripts/apply-patches.sh --arch ${KERNEL_ARCH}
+EOF
     exit 1
 fi
 
@@ -18,9 +38,9 @@ cd "${KERNEL_DIR}"
 
 # With LLVM=1 LLVM_IAS=1 the kernel uses clang for compilation, integrated
 # assembler, ld.lld for linking, llvm-objcopy. CROSS_COMPILE is still set so
-# helpers that shell out to ${CROSS_COMPILE}gcc find aarch64-linux-gnu-gcc.
-export ARCH=arm64
-export CROSS_COMPILE=aarch64-linux-gnu-
+# helpers that shell out to ${CROSS_COMPILE}gcc find the right gcc.
+export ARCH="${KBUILD_ARCH}"
+export CROSS_COMPILE="${KBUILD_CROSS}"
 export LLVM=1
 export LLVM_IAS=1
 # ccache wraps via /usr/lib/ccache symlinks already on PATH
@@ -34,6 +54,8 @@ export OBJDUMP=llvm-objdump
 export STRIP=llvm-strip
 
 JOBS="${JOBS:-$(nproc)}"
+
+echo "==> Building for ${KERNEL_ARCH} (ARCH=${ARCH}, CROSS_COMPILE=${CROSS_COMPILE})"
 
 echo "==> defconfig"
 make -j "${JOBS}" gki_defconfig
@@ -65,27 +87,47 @@ CONFIG_DEFAULT_HOSTNAME="localhost"
 # files load despite version mismatch. Forcing them =y would cause init's
 # insmod calls to fail with "Device or resource busy" -> kernel panic.
 EOF
+
+# x86_64 hooks KSU through the indirect syscall table, which the 6.6 syscall
+# hardening replaces with direct branches. patches/x86_64/ restores an indirect
+# path behind X86_FEATURE_INDIRECT_SAFE, selected at runtime with
+# `syscall_hardening=off` on the kernel cmdline (start_avd.sh passes it).
+# Do NOT also enable CONFIG_KSU_X86_PATCH_SYSCALL_DISPATCHER -- pick one method.
+if [[ "${KERNEL_ARCH}" == "x86_64" ]]; then
+    cat >> .config <<'EOF'
+# CONFIG_KSU_X86_PATCH_SYSCALL_DISPATCHER is not set
+EOF
+fi
+
 make -j "${JOBS}" olddefconfig
 
-echo "==> Build (parallel jobs=${JOBS})"
-time make -j "${JOBS}" Image Image.gz
+BOOT_DIR="$(arch_boot_dir)"
+
+echo "==> Build (parallel jobs=${JOBS}, targets: ${KBUILD_TARGETS[*]})"
+time make -j "${JOBS}" "${KBUILD_TARGETS[@]}"
 
 echo
 echo "==> Build complete"
-ls -la arch/arm64/boot/Image* | sed 's|^|    |'
+for img in "${KBUILD_OUTPUTS[@]}"; do
+    ls -la "${BOOT_DIR}/${img}" | sed 's|^|    |'
+done
 
 # Copy the kernel image out of the named-volume source tree into the host-
-# bind-mounted /work/out/ so avd-boot.sh on the host can find it. Do this
-# BEFORE the banner-print pipeline below -- grep -m1 closes its stdin which
-# gives `strings` SIGPIPE, which with pipefail set would abort the script
-# right before we copied the output. Copy first, then the banner is decorative.
+# bind-mounted /work/out/ so the host can find it. Do this BEFORE the banner-
+# print pipeline below -- grep -m1 closes its stdin which gives `strings`
+# SIGPIPE, which with pipefail set would abort the script right before we
+# copied the output. Copy first, then the banner is decorative.
+#
+# Output names are distinct per arch (Image/Image.gz vs bzImage), so both
+# arches can coexist in out/ without clobbering each other.
 OUTDIR="${ROOT}/out"
 mkdir -p "${OUTDIR}"
-cp -fv arch/arm64/boot/Image    "${OUTDIR}/Image"
-cp -fv arch/arm64/boot/Image.gz "${OUTDIR}/Image.gz"
+for img in "${KBUILD_OUTPUTS[@]}"; do
+    cp -fv "${BOOT_DIR}/${img}" "${OUTDIR}/${img}"
+done
 echo
 echo "==> Kernel images copied to host at: kernel-build/out/"
 
 echo
 echo "Kernel build version banner:"
-( strings arch/arm64/boot/Image || true ) | grep -m1 "Linux version" | sed 's|^|    |' || true
+( strings "${BOOT_DIR}/${KBUILD_OUTPUTS[0]}" || true ) | grep -m1 "Linux version" | sed 's|^|    |' || true

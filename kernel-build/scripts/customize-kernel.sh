@@ -7,14 +7,17 @@
 # Modifications:
 #   1. kernel/module/procfs.c -- filter goldfish/qemu/virtio entries from
 #      /proc/modules
-#   2. arch/arm64/kernel/cpuinfo.c -- print Tensor-G5-shaped CPU implementer
-#      (0x41) and parts (Cortex-X4 / A720 / A520)
+#   2. arch/arm64/kernel/cpuinfo.c -- (arm64 only) print Tensor-G5-shaped CPU
+#      implementer (0x41) and parts (Cortex-X4 / A720 / A520). There is no
+#      x86_64 equivalent: MIDR is an ARM register, and on x86_64 /proc/cpuinfo
+#      is spoofed at runtime via SUSFS open_redirect onto avd-fake/cpuinfo.
 #   3. drivers/base/devtmpfs.c -- suppress devtmpfs nodes for
 #      goldfish_* / qemu_* / ranchu_* names
 
 set -euo pipefail
 
 KERNEL_DIR="${1:?need path to kernel source tree}"
+KERNEL_ARCH="${KERNEL_ARCH:-arm64}"
 cd "${KERNEL_DIR}"
 
 MARKER='AVD_SPOOF_INJECTED'
@@ -75,8 +78,9 @@ PY
 fi
 
 # ============================================================================
-# 2. /proc/cpuinfo spoof (arm64)
+# 2. /proc/cpuinfo spoof (arm64 builds only)
 # ============================================================================
+if [[ "${KERNEL_ARCH}" == "arm64" ]]; then
 f=arch/arm64/kernel/cpuinfo.c
 if grep -q "${MARKER}" "$f"; then
     echo "  - ${f}: already injected"
@@ -130,6 +134,9 @@ src = re.sub(r'^\s*struct\s+cpuinfo_arm64\s*\*\s*cpuinfo\s*=\s*[^;]+;\s*\n', '\n
 
 open(path, 'w').write(src)
 PY
+fi
+else
+    echo "  - /proc/cpuinfo: no kernel-level spoof on ${KERNEL_ARCH} (SUSFS open_redirect serves avd-fake/cpuinfo at runtime)"
 fi
 
 # ============================================================================

@@ -68,6 +68,54 @@ docker run --rm \
 
 Output (copied to the host bind mount): `out/Image` and `out/Image.gz`.
 
+### Target architecture
+
+Every script takes `--arch arm64` (the default) or `--arch x86_64`:
+
+```bash
+docker run --rm -v "$PWD":/work -v kbuild-sources:/work/sources \
+    -w /work kbuild ./scripts/build-all.sh --arch x86_64
+```
+
+| | `arm64` | `x86_64` |
+|---|---|---|
+| ARCH / CROSS_COMPILE | `arm64` / `aarch64-linux-gnu-` | `x86_64` / `x86_64-linux-gnu-` |
+| kernel source dir | `arch/arm64` | `arch/x86` (the Makefile maps it) |
+| make target → output | `Image Image.gz` → `out/Image.gz` | `bzImage` → `out/bzImage` |
+| extra patches | none | `patches/x86_64/`, `scripts/fix-ksu-x86_64.sh` |
+| `/proc/cpuinfo` spoof | in-kernel MIDR rewrite | SUSFS `open_redirect` at runtime |
+
+Both are **cross-compiles** — the host architecture is irrelevant and one
+container image builds either. The output filenames differ, so both arches can
+sit in `out/` at once.
+
+`.avd-patches-applied` records which arch the source tree was patched for, and
+`build.sh` refuses to build the other one against it. The arches apply different
+patch sets, and the failure mode without that check is silent: an x86_64 kernel
+built from an arm64-patched tree compiles and boots, and KSU simply never gets
+root. Switch arch by re-running `apply-patches.sh --arch <a>` first.
+
+#### Why x86_64 needs extra patches
+
+Kernel 6.6 hardens the x86_64 syscall path by replacing the indirect branch with
+a series of direct branches, which blocks KernelSU's syscall-table hooking.
+`patches/x86_64/` carries two upstream-derived patches that reinstate an
+indirect path behind `X86_FEATURE_INDIRECT_SAFE` and let it be selected from the
+kernel cmdline, so booting with `syscall_hardening=off` re-enables it.
+
+Do **not** combine that with `CONFIG_KSU_X86_PATCH_SYSCALL_DISPATCHER` — they are
+two solutions to the same problem and `build.sh` explicitly disables the latter.
+
+`scripts/fix-ksu-x86_64.sh` then repairs the compile errors the Wild
+KSU↔SUSFS integration patch leaves on x86_64 (it is written against arm64): a
+missing `linux/compat.h`, dropped `strncpy_from_user` return checks, an
+arm64-only `TIF_SECCOMP` test and a dropped `linux/kallsyms.h`.
+
+> The x86_64 work is adapted from the
+> [jdw1023](https://github.com/jdw1023/AVD_Rooted_Integrity) fork, which
+> switched this build to x86_64 outright; here it is parameterised so both
+> arches build from one set of scripts.
+
 > **Why the `kbuild-sources` named volume is required.** The AOSP kernel tree
 > contains files that differ only in case (e.g.
 > `…+pooncelock+poonceLock+….litmus` vs `…+pooncelock+pooncelock+….litmus`).
@@ -84,9 +132,11 @@ Output (copied to the host bind mount): `out/Image` and `out/Image.gz`.
 ```bash
 V="-v $PWD:/work -v kbuild-sources:/work/sources -w /work"
 docker run --rm $V kbuild ./scripts/fetch-sources.sh
-docker run --rm $V kbuild ./scripts/apply-patches.sh
-docker run --rm $V kbuild ./scripts/build.sh
+docker run --rm $V kbuild ./scripts/apply-patches.sh --arch arm64
+docker run --rm $V kbuild ./scripts/build.sh         --arch arm64
 ```
+
+Sources are arch-independent, so `fetch-sources.sh` takes no `--arch`.
 
 ### Reset the source tree if patches fail to apply
 
@@ -149,7 +199,7 @@ single-shot and cached. Subsequent runs skip.
 **Source customization didn't apply.** `customize-kernel.sh` is idempotent and
 guarded by an `AVD_SPOOF_INJECTED` marker comment. If a customization is
 missing, AOSP moved the function it anchors on (e.g. `m_show` in
-`kernel/module/procfs.c`, `c_show` in `arch/arm64/kernel/cpuinfo.c`). The
+`kernel/module/procfs.c`, `c_show` in `arch/arm64/kernel/cpuinfo.c` on arm64). The
 Python `assert`s will fail loudly pointing at the function that moved; adjust
 the anchor regex in `customize-kernel.sh` to match the new context.
 

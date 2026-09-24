@@ -1,0 +1,136 @@
+# Build the custom GKI kernel (KernelSU-Next + SUSFS + anti-emulator patches)
+# for both target arches and publish the images.
+#
+# Both builds are cross-compiles driven by scripts/build-all.sh --arch <a>, so
+# they run on the same ubuntu-latest runner and in the same container image.
+#
+# The GCS publish step is inert until Workload Identity Federation is
+# configured: it is skipped unless the GCP_WORKLOAD_IDENTITY_PROVIDER repo
+# variable is set. The artifact upload always runs, so the kernel is
+# retrievable from the run either way.
+
+name: kernel
+
+on:
+  workflow_dispatch:
+    inputs:
+      arch:
+        description: Which arch to build
+        type: choice
+        default: both
+        options: [both, arm64, x86_64]
+  push:
+    paths:
+      - 'kernel-build/**'
+      - '.github/workflows/kernel.yml'
+
+# A kernel build is ~30-60 min; don't stack them up on a busy branch.
+concurrency:
+  group: kernel-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  id-token: write        # required for Workload Identity Federation
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [arm64, x86_64]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Skip arches not requested
+        id: gate
+        run: |
+          want='${{ github.event.inputs.arch || 'both' }}'
+          if [[ "$want" == "both" || "$want" == "${{ matrix.arch }}" ]]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::${{ matrix.arch }} not requested ($want); skipping."
+          fi
+
+      # The AOSP common-kernel clone is ~3 GB and the build tree is ~10 GB more.
+      # A stock ubuntu-latest runner does not have room for both without this.
+      - name: Reclaim runner disk
+        if: steps.gate.outputs.run == 'true'
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          sudo docker image prune -af
+          df -h /
+
+      - name: Restore ccache
+        if: steps.gate.outputs.run == 'true'
+        uses: actions/cache@v4
+        with:
+          path: kernel-build/.ccache
+          key: ccache-${{ matrix.arch }}-${{ github.sha }}
+          restore-keys: |
+            ccache-${{ matrix.arch }}-
+
+      - name: Build container image
+        if: steps.gate.outputs.run == 'true'
+        working-directory: kernel-build
+        run: docker build -t kbuild .
+
+      # The kbuild-sources named volume mirrors the documented local
+      # invocation (on macOS it is required -- the kernel tree has paths that
+      # collide on a case-insensitive filesystem). Keeping CI identical means a
+      # CI failure reproduces locally with the same command.
+      - name: Build kernel (${{ matrix.arch }})
+        if: steps.gate.outputs.run == 'true'
+        working-directory: kernel-build
+        run: |
+          docker volume create kbuild-sources
+          docker run --rm \
+            -v "$PWD":/work \
+            -v kbuild-sources:/work/sources \
+            -w /work kbuild \
+            ./scripts/build-all.sh --arch ${{ matrix.arch }}
+
+      - name: Identify output
+        if: steps.gate.outputs.run == 'true'
+        id: out
+        working-directory: kernel-build
+        run: |
+          if [[ "${{ matrix.arch }}" == "arm64" ]]; then
+            img=Image.gz
+          else
+            img=bzImage
+          fi
+          test -s "out/$img" || { echo "::error::out/$img missing or empty"; ls -la out/ || true; exit 1; }
+          echo "img=$img" >> "$GITHUB_OUTPUT"
+          echo "### ${{ matrix.arch }} \`$img\` — $(du -h "out/$img" | cut -f1)" >> "$GITHUB_STEP_SUMMARY"
+          strings "out/$img" | grep -m1 "Linux version" >> "$GITHUB_STEP_SUMMARY" || true
+
+      - name: Upload kernel artifact
+        if: steps.gate.outputs.run == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-${{ matrix.arch }}
+          path: kernel-build/out/${{ steps.out.outputs.img }}
+          if-no-files-found: error
+
+      # ---- Publish to GCS -------------------------------------------------
+      # Skipped entirely until WIF is configured. Keyless: no service-account
+      # JSON in the repo. See docs/CI.md.
+      - name: Authenticate to Google Cloud
+        if: steps.gate.outputs.run == 'true' && vars.GCP_WORKLOAD_IDENTITY_PROVIDER != ''
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+
+      - name: Publish kernel to GCS
+        if: steps.gate.outputs.run == 'true' && vars.GCP_WORKLOAD_IDENTITY_PROVIDER != ''
+        uses: google-github-actions/upload-cloud-storage@v2
+        with:
+          path: kernel-build/out/${{ steps.out.outputs.img }}
+          destination: ${{ vars.GCS_BUCKET }}/payloads/kernel

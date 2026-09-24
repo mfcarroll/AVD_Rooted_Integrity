@@ -12,8 +12,10 @@ device/data_adb/tricky_store/keybox.xml
 kernel-build/sources/
 kernel-build/out/
 kernel-build/.ccache/
-kernel-build/patches/
 kernel-build/docs/
+# NB: kernel-build/patches/ is TRACKED. It holds the arch-specific kernel
+# patches (patches/x86_64/) that apply-patches.sh applies, so it is source,
+# not an artifact.
 *.log
 
 # Prebuilt / large binaries — this repo is source + scripts only.
@@ -21,6 +23,7 @@ kernel-build/docs/
 *.img.gz
 Image
 Image.gz
+bzImage
 *.tar.gz
 *.zip
 *.apk
