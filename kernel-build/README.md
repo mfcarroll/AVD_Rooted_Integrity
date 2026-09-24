@@ -125,6 +125,48 @@ Secret Manager, injected at build time — not a file in the repo. Disabling
 that currently reaches `MEETS_STRONG_INTEGRITY`, and is not worth the risk for a
 build-hygiene property.
 
+#### x86_64: build from Google's kernel-ranchu config, not gki_defconfig
+
+`build.sh --arch x86_64` bases its config on `configs/x86_64-ranchu.config`
+rather than running `make gki_defconfig`. That file is the emulator kernel's own
+config, taken from `/proc/config.gz` on a stock boot of the same android-36
+x86_64 image; it is the same 6.6.66 this builds.
+
+**This is not a preference.** The AVD's graphics stack lives in VENDOR modules —
+`goldfish_address_space`, `goldfish_sync`, `virtio-gpu`, loaded from
+`/vendor/lib/modules` — built separately against that exact kernel. A kernel
+assembled from `gki_defconfig` has a different `struct module` layout and every
+one of them is refused:
+
+    .gnu.linkonce.this_module section size must match the kernel's built
+    struct module size at run time
+
+The guest then boots, reaches Android userspace, and crash-loops surfaceflinger
+on a black screen — 185 SIGABRTs in one boot, indistinguishable from a hang.
+
+Two things follow, both counter-intuitive:
+
+- **Do not build the virtio/goldfish drivers in to work around it.** Once the
+  ABI matches, a built-in `goldfish_pipe` *shadows* the vendor one
+  (`Device or resource busy`), and `goldfish_address_space` is linked against
+  the vendor module, not ours. Google's config sets no `CONFIG_GOLDFISH` at all.
+- **Do not chase `struct module` field by field.** It has a dozen conditional
+  fields. BTF is one of them and fixing it alone changed nothing. Basing on the
+  reference config makes ABI agreement structural instead of reverse-engineered.
+
+Verified 2026-09-24 on an Intel Mac: boots to the home screen in ~1 minute,
+`uname -r` = 6.6.66-android16-5-Pixel10Pro+, zero surfaceflinger aborts, vendor
+modules present in `lsmod`, and after installing the KSU manager
+`su -c id` returns `uid=0(root) ... context=u:r:ksu:s0` — which is also the only
+available proof that `syscall_hardening=off` reached the kernel, since SUSFS
+spoofs `/proc/cmdline`.
+
+> **arm64 deliberately still uses `gki_defconfig`**, with BTF pinned off, because
+> that is the configuration validated at `MEETS_STRONG_INTEGRITY`. It appears to
+> match its own vendor modules by luck rather than design. Rebasing it on its own
+> ranchu config would put it on the same footing, but only as a deliberate
+> experiment ending in a re-measured verdict.
+
 #### Why x86_64 needs extra patches
 
 Kernel 6.6 hardens the x86_64 syscall path by replacing the indirect branch with
