@@ -23,6 +23,13 @@ on:
     paths:
       - 'kernel-build/**'
       - '.github/workflows/kernel.yml'
+      # A two-arch kernel build is 30-60 min of runner time. Editing
+      # kernel-build/README.md used to buy one, because it sits under
+      # kernel-build/**. Exclusion patterns are evaluated in order and the last
+      # match for a file wins, so these must come after the includes above.
+      # A commit touching a doc AND a script still builds: the workflow runs if
+      # ANY changed file ends up included.
+      - '!**.md'
 
 # A kernel build is ~30-60 min; don't stack them up on a busy branch.
 concurrency:
