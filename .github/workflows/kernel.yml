@@ -106,16 +106,31 @@ jobs:
             img=bzImage
           fi
           test -s "out/$img" || { echo "::error::out/$img missing or empty"; ls -la out/ || true; exit 1; }
-          echo "img=$img" >> "$GITHUB_OUTPUT"
-          echo "### ${{ matrix.arch }} \`$img\` — $(du -h "out/$img" | cut -f1)" >> "$GITHUB_STEP_SUMMARY"
-          strings "out/$img" | grep -m1 "Linux version" >> "$GITHUB_STEP_SUMMARY" || true
+
+          # Publish under the name the consumer already expects. avd-cloud-portable's
+          # stacks/ksu.sh looks for payloads/kernel/<img>-android15-6.6-ksu-susfs, and
+          # payloads/manifest.tsv tracks that name -- publishing bare Image.gz/bzImage
+          # lands two files the manifest does not know about, which `payloads.sh verify`
+          # then reports as untracked. The suffix also records WHICH kernel this is,
+          # which matters once there is more than one.
+          pub="$img-android15-6.6-ksu-susfs"
+          cp -f "out/$img" "out/$pub"
+
+          echo "img=$img"  >> "$GITHUB_OUTPUT"
+          echo "pub=$pub"  >> "$GITHUB_OUTPUT"
+          {
+            echo "### ${{ matrix.arch }} — \`$pub\` ($(du -h "out/$img" | cut -f1))"
+            echo '```'
+            strings "out/$img" | grep -m1 "Linux version" || echo "(banner is inside the compressed payload)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload kernel artifact
         if: steps.gate.outputs.run == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: kernel-${{ matrix.arch }}
-          path: kernel-build/out/${{ steps.out.outputs.img }}
+          path: kernel-build/out/${{ steps.out.outputs.pub }}
           if-no-files-found: error
 
       # ---- Publish to GCS -------------------------------------------------
@@ -132,5 +147,5 @@ jobs:
         if: steps.gate.outputs.run == 'true' && vars.GCP_WORKLOAD_IDENTITY_PROVIDER != ''
         uses: google-github-actions/upload-cloud-storage@v2
         with:
-          path: kernel-build/out/${{ steps.out.outputs.img }}
+          path: kernel-build/out/${{ steps.out.outputs.pub }}
           destination: ${{ vars.GCS_BUCKET }}/payloads/kernel
