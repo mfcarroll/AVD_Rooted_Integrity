@@ -21,34 +21,47 @@ Two things the runner needs that a local build does not:
   not fit on a stock runner. The workflow deletes the preinstalled .NET, Android
   SDK, GHC and CodeQL trees first.
 - **ccache.** Restored from `actions/cache` keyed on arch, otherwise every run is
-  a cold ~30–60 min build.
+  a cold build. Measured cold on `ubuntu-latest`: arm64 33 min, x86_64 26 min.
 
 ## Enabling the GCS publish
 
-The publish steps are skipped unless the repository variable
-`GCP_WORKLOAD_IDENTITY_PROVIDER` is set, so the workflow is useful (as an
-artifact build) before any cloud setup exists. To turn publishing on, set three
-**repository variables** — not secrets; none of these are sensitive:
+**This is Terraform, not a manual setup.** It lives in the sibling repo:
 
-| Variable | Example |
+```bash
+cd avd-cloud-portable/infra
+GITHUB_TOKEN=$(gh auth token) terraform apply
+```
+
+That creates the Workload Identity pool and GitHub OIDC provider, the
+`kernel-ci` service account with `objectAdmin` on the payload bucket only, the
+Secret Manager secret for the keybox, and it sets the three repo variables on
+this repository directly:
+
+| Variable | Set by Terraform to |
 |---|---|
-| `GCP_WORKLOAD_IDENTITY_PROVIDER` | `projects/123456789/locations/global/workloadIdentityPools/github/providers/github` |
+| `GCP_WORKLOAD_IDENTITY_PROVIDER` | `projects/<num>/locations/global/workloadIdentityPools/github/providers/github` |
 | `GCP_SERVICE_ACCOUNT` | `kernel-ci@<project>.iam.gserviceaccount.com` |
-| `GCS_BUCKET` | `avd-cloud-vms` |
+| `GCS_BUCKET` | the bucket name, **no `gs://` prefix** |
+
+Pass `-var manage_github_variables=false` to set them by hand instead; the root
+outputs the same three values.
 
 Authentication is **Workload Identity Federation** — GitHub's OIDC token is
 exchanged for short-lived Google credentials. There is no service-account JSON
 key in the repository or in secrets, so there is no long-lived credential to
 leak or rotate.
 
-Scope the pool's attribute condition to this repository. A provider that trusts
-the whole `github.com` issuer lets *any* repository on GitHub mint tokens for
-your service account:
+The provider's attribute condition is scoped to this repository:
 
-    attribute.repository == "mfcarroll/AVD_Rooted_Integrity"
+    assertion.repository == "mfcarroll/AVD_Rooted_Integrity"
 
-Grant the service account `roles/storage.objectAdmin` on the bucket only, not at
-project level.
+That is load-bearing, not decoration. Without it the provider trusts the whole
+`github.com` issuer and any repository on GitHub can mint tokens for the
+service account. This repository is public.
+
+> **Variables are snapshotted when a run is created.** Setting them does not
+> affect a run already in flight — its publish steps still skip. Re-run the
+> workflow afterwards.
 
 ## The keybox is not built into anything
 
@@ -61,6 +74,12 @@ published image and never uploaded to the bucket:
   Identity Federation binding, and injected at deploy or first boot by
   `avd-cloud-portable/scripts/install-keybox.sh` — which is a standalone flow for
   exactly this reason, and validates the keybox against Google's live CRL.
+- Terraform creates the secret **container** only, never a
+  `google_secret_manager_secret_version`. Terraform state holds every attribute
+  in plaintext, so a version resource would write the private key into
+  `terraform.tfstate` and every backup and plan file. Load the value out of band:
+
+      gcloud secrets versions add avd-keybox --data-file=payloads/keybox/keybox.xml
 
 Published images stay keybox-free. Rotation is then a secret update, not a
 rebuild — which matters, because a keybox that gets distributed widely is one
