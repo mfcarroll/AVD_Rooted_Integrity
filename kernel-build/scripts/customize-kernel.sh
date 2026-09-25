@@ -37,21 +37,27 @@ src = open(path).read()
 
 block = r'''
 /* AVD_SPOOF_INJECTED: hide emulator-fingerprint modules from /proc/modules */
-static const char * const avd_hidden_module_names[] = {
-	"goldfish_pipe", "goldfish_sync", "goldfish_address_space",
-	"goldfish_battery", "goldfish_audio", "goldfish_camera",
-	"goldfish_fb", "goldfish_tty", "goldfish_nand",
-	"virt_wifi", "mac80211_hwsim",
-	"virtio_gpu", "virtio_dma_buf", "virtio_snd", "virtio_input",
-	"virtio_net", "virtio_blk", "virtio_pmem", "virtio_console",
-	"virtio_balloon", "virtio_rng",
+/*
+ * PREFIXES, not an exact list. The original was strcmp against a fixed set and
+ * it hid nothing that was actually loaded: measured on a running AVD 2026-09-25,
+ * /proc/modules showed virtual_cpufreq, virtio_media, vexpress_sysreg,
+ * v4l2loopback, usbip_core and vhci_hcd — not one of them was in the list, while
+ * most of the names that were (virtio_gpu, goldfish_fb, ...) are not loaded on
+ * this image at all. An enumerable list of emulator modules is a losing game;
+ * the families are stable, the members are not.
+ */
+static const char * const avd_hidden_module_prefixes[] = {
+	"goldfish", "qemu", "ranchu", "virtio", "virt_",
+	"vexpress", "usbip", "vhci", "v4l2loopback",
+	"virtual_cpufreq", "mac80211_hwsim",
 	NULL,
 };
 static bool avd_module_hidden(const char *name)
 {
 	int i;
-	for (i = 0; avd_hidden_module_names[i]; i++)
-		if (!strcmp(name, avd_hidden_module_names[i]))
+	for (i = 0; avd_hidden_module_prefixes[i]; i++)
+		if (!strncmp(name, avd_hidden_module_prefixes[i],
+			     strlen(avd_hidden_module_prefixes[i])))
 			return true;
 	return false;
 }
