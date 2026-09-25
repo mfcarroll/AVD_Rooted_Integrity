@@ -99,12 +99,6 @@ fi
 # than failing to build.
 export KBUILD_COMPILER_STRING="${KBUILD_COMPILER_STRING:-Android (12027248, +pgo, +bolt, +lto, +mlgo, based on r522817b) clang version 18.0.3 (https://android.googlesource.com/toolchain/llvm-project 5f78b6f0b58c5734b16dd92dbab2bfa19e9c5e3a), LLD 18.0.3}"
 
-# Suppress the trailing "+" setlocalversion adds for a dirty tree. We patch the
-# source deliberately, so it is always dirty, and no Google release kernel
-# carries a "+". An empty .scmversion makes setlocalversion use that instead of
-# interrogating git.
-: > "${KERNEL_DIR}/.scmversion"
-
 echo "==> banner identity: ${KBUILD_BUILD_USER}@${KBUILD_BUILD_HOST}, ${KBUILD_BUILD_TIMESTAMP}"
 
 JOBS="${JOBS:-$(nproc)}"

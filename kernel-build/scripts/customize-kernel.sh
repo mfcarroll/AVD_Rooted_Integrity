@@ -244,4 +244,40 @@ print("    injected")
 PY2
 fi
 
+# ============================================================================
+# 6. scripts/setlocalversion -- drop the trailing "+"
+# ============================================================================
+# With CONFIG_LOCALVERSION_AUTO=n, scm_version takes its --short path and emits
+# "+" whenever it cannot resolve the checkout to an exact tag. We clone with
+# --branch <tag> into a detached HEAD and then patch the tree, so that lookup
+# fails and every build came out as "...-ab13070261+".
+#
+# No Google release kernel carries a "+" — it means "built from a tree that is
+# not exactly a release". It is a small tell in a string any app can read, and
+# now that /proc/version is no longer spoofed at runtime it is the real one.
+#
+# .scmversion does NOT work here: 6.6's setlocalversion does not consult it.
+# Tried first, measured, no effect.
+f=scripts/setlocalversion
+if grep -q "${MARKER}" "$f"; then
+    echo "  - ${f}: already injected"
+else
+    echo "  - ${f}: suppressing the dirty-tree \"+\""
+    python3 - "$f" <<'PY2'
+import sys
+path = sys.argv[1]
+src = open(path).read()
+needle = '\t\tif $short; then\n\t\t\techo "+"\n\t\t\treturn\n\t\tfi\n'
+assert needle in src, "setlocalversion layout changed — short path not found"
+src = src.replace(needle,
+    '\t\tif $short; then\n'
+    '\t\t\t# ' + 'AVD_SPOOF_INJECTED' + ': a release kernel has no "+"\n'
+    '\t\t\techo ""\n'
+    '\t\t\treturn\n'
+    '\t\tfi\n', 1)
+open(path, 'w').write(src)
+print("    injected")
+PY2
+fi
+
 echo "==> kernel customization complete"
