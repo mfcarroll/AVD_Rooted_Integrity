@@ -63,13 +63,20 @@ export STRIP=llvm-strip
 # And disclosure: the default reads `root@<docker-container-id>`, e.g.
 # root@29806e91e7ad. This kernel is the centrepiece of an anti-detection stack;
 # announcing that it was built as root inside a container works against that.
-# build-user@build-host is what real AOSP GKI release kernels report.
+# android-build@abfarm-2003 is what real AOSP GKI release kernels report.
+#
+# Not cosmetic. /proc/version is readable by any app, and the previous value said
+# "(build-user@build-host) ... Ubuntu clang version 18.1.3" — a self-built kernel
+# announced in one line. Userspace could not fix it: a bind mount over
+# /proc/version is access-checked against the SOURCE inode's SELinux label, and
+# nothing reachable from /data/adb is readable by an app. Fixing the banner here
+# removes the need for that spoof entirely.
 #
 # The timestamp comes from the pinned kernel tag's own commit date, so it is
 # deterministic for a given KERNEL_TAG and still a plausible build date --
 # rather than a hardcoded lie that drifts further from the source every release.
-export KBUILD_BUILD_USER="${KBUILD_BUILD_USER:-build-user}"
-export KBUILD_BUILD_HOST="${KBUILD_BUILD_HOST:-build-host}"
+export KBUILD_BUILD_USER="${KBUILD_BUILD_USER:-android-build}"
+export KBUILD_BUILD_HOST="${KBUILD_BUILD_HOST:-abfarm-2003}"
 if [[ -z "${KBUILD_BUILD_TIMESTAMP:-}" ]]; then
     # format-local + TZ=UTC so the stamp does not depend on the builder's
     # timezone, and UTC is spelled literally: git's %Z renders empty here, which
@@ -85,6 +92,19 @@ if [[ -z "${KBUILD_BUILD_TIMESTAMP:-}" ]]; then
     fi
     export KBUILD_BUILD_TIMESTAMP
 fi
+# The compiler string is the other half of the giveaway. mkcompile_h builds
+# LINUX_COMPILER from "${CC_VERSION}, ${LD_VERSION}", which here is Ubuntu clang.
+# customize-kernel.sh patches that script to honour this variable; without the
+# patch it is ignored, so an unpatched tree degrades to the old string rather
+# than failing to build.
+export KBUILD_COMPILER_STRING="${KBUILD_COMPILER_STRING:-Android (12027248, +pgo, +bolt, +lto, +mlgo, based on r522817b) clang version 18.0.3 (https://android.googlesource.com/toolchain/llvm-project 5f78b6f0b58c5734b16dd92dbab2bfa19e9c5e3a), LLD 18.0.3}"
+
+# Suppress the trailing "+" setlocalversion adds for a dirty tree. We patch the
+# source deliberately, so it is always dirty, and no Google release kernel
+# carries a "+". An empty .scmversion makes setlocalversion use that instead of
+# interrogating git.
+: > "${KERNEL_DIR}/.scmversion"
+
 echo "==> banner identity: ${KBUILD_BUILD_USER}@${KBUILD_BUILD_HOST}, ${KBUILD_BUILD_TIMESTAMP}"
 
 JOBS="${JOBS:-$(nproc)}"
@@ -139,7 +159,6 @@ CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y
 CONFIG_KSU_SUSFS_ENABLE_LOG=y
 CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y
 CONFIG_LSM="landlock,lockdown,yama,loadpin,safesetid,selinux,smack,tomoyo,apparmor,bpf"
-CONFIG_LOCALVERSION="-android16-5-Pixel10Pro"
 # CONFIG_LOCALVERSION_AUTO is not set
 CONFIG_DEFAULT_HOSTNAME="localhost"
 # ARM64 ONLY: we do NOT force virtio_*/goldfish_*/dmabuf/binder/drm to =y. The
@@ -153,6 +172,24 @@ CONFIG_DEFAULT_HOSTNAME="localhost"
 # vermagic bypass does not cover, so leaving them as =m means no block devices
 # and a boot loop.
 EOF
+
+# LOCALVERSION NAMES NO DEVICE, deliberately. Appended here rather than inside
+# the quoted heredoc above so the sha can be interpolated.
+#
+# It was "-android16-5-Pixel10Pro". Once /proc/version reports this string for
+# real rather than through a spoof, a device name in it has to agree with what
+# the PIF profile claims — and that profile claims a Pixel 9 Pro Fold, which runs
+# a 6.1 kernel, not 6.6.66. Rather than couple the two and let them drift (they
+# already did: uname, /proc/version and the profile told three different
+# stories), the kernel identifies itself as generic Google GKI and cannot
+# contradict any device.
+#
+# -g<sha> is this tree's real HEAD, a genuine android.googlesource.com commit.
+# -ab<n> is a plausible Android build number: arbitrary, and only has to look
+# like one.
+KERNEL_SCM_SHA=$(git -C "${KERNEL_DIR}" rev-parse --short=12 HEAD 2>/dev/null || echo 000000000000)
+echo "CONFIG_LOCALVERSION=\"-android16-5-g${KERNEL_SCM_SHA}-ab13070261\"" >> .config
+echo "==> localversion: -android16-5-g${KERNEL_SCM_SHA}-ab13070261"
 
 # ARM64: keep BTF OFF, explicitly.
 #

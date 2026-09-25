@@ -155,4 +155,93 @@ fi
 # names, which our 02-avd-deeper-spoof.sh on-device script already handles.
 echo "  - drivers/base/devtmpfs.c: SKIPPED (would break AVD init)"
 
+# ============================================================================
+# 4. scripts/mkcompile_h -- honour KBUILD_COMPILER_STRING
+# ============================================================================
+# LINUX_COMPILER is baked from "${CC_VERSION}, ${LD_VERSION}", which on this
+# build image reads "Ubuntu clang version 18.1.3 (1ubuntu1), Ubuntu LLD 18.1.3".
+# That string is in /proc/version, which any app can read, and it says
+# "self-built kernel" as plainly as anything could.
+#
+# It cannot be fixed from userspace: a bind mount over /proc/version is
+# access-checked against the source inode's SELinux label, and nothing reachable
+# from /data/adb is readable by an app. So fix it where it is generated.
+#
+# build.sh exports KBUILD_COMPILER_STRING. If this patch has not been applied the
+# variable is simply ignored, so the failure mode is the old string rather than a
+# broken build.
+f=scripts/mkcompile_h
+if grep -q "KBUILD_COMPILER_STRING" "$f"; then
+    echo "  - ${f}: already injected"
+else
+    echo "  - ${f}: honouring KBUILD_COMPILER_STRING"
+    python3 - "$f" <<'PY2'
+import sys
+path = sys.argv[1]
+src = open(path).read()
+old = '#define LINUX_COMPILER\t\t"${CC_VERSION}, ${LD_VERSION}"'
+assert old in src, "mkcompile_h layout changed — LINUX_COMPILER line not found"
+new = ('if test -n "$KBUILD_COMPILER_STRING"; then\n'
+       '\tLINUX_COMPILER_STR="$KBUILD_COMPILER_STRING"\n'
+       'else\n'
+       '\tLINUX_COMPILER_STR="${CC_VERSION}, ${LD_VERSION}"\n'
+       'fi\n\n')
+# insert the selection just before the cat heredoc that emits the defines
+src = src.replace('cat <<EOF', new + 'cat <<EOF', 1)
+src = src.replace(old, '#define LINUX_COMPILER\t\t"${LINUX_COMPILER_STR}"')
+open(path, 'w').write(src)
+print("    injected")
+PY2
+fi
+
+# ============================================================================
+# 5. arch/x86/kernel/cpu/proc.c -- drop the "hypervisor" CPU flag
+# ============================================================================
+# x86_64 has no MIDR to rewrite, so section 2's arm64 approach does not apply.
+# The one unambiguous tell in an x86 /proc/cpuinfo is the `hypervisor` flag: the
+# CPU sets it when running under virtualisation and no physical phone has it.
+# Everything else on this guest (a real Intel model name, real cache sizes) is
+# plausible as-is.
+#
+# The previous plan was to spoof the whole file at runtime via SUSFS
+# open_redirect onto avd-fake/cpuinfo. That never worked — measured 2026-09-25,
+# it returns EACCES to apps because the redirect target is under /data/adb.
+f=arch/x86/kernel/cpu/proc.c
+if [ ! -f "$f" ]; then
+    echo "  - ${f}: absent (not an x86 tree) — skipped"
+elif grep -q "${MARKER}" "$f"; then
+    echo "  - ${f}: already injected"
+else
+    echo "  - ${f}: hiding the hypervisor flag"
+    python3 - "$f" <<'PY2'
+import sys, re
+path = sys.argv[1]
+src = open(path).read()
+# show_cpuinfo prints each set flag from x86_cap_flags[]; skip the one that
+# announces virtualisation.
+# The loop is BRACELESS:
+#     for (i = 0; i < 32*NCAPINTS; i++)
+#             if (cpu_has(c, i) && x86_cap_flags[i] != NULL)
+#                     seq_printf(m, " %s", x86_cap_flags[i]);
+# so inserting a statement before the `if` silently moves the printf OUT of the
+# loop, where it runs once with i == 32*NCAPINTS — a compiling, out-of-bounds
+# read. Replace the whole construct with a braced body instead. Caught by
+# reading the patched output; the compiler would not have complained.
+needle = ('\tfor (i = 0; i < 32*NCAPINTS; i++)\n'
+          '\t\tif (cpu_has(c, i) && x86_cap_flags[i] != NULL)\n'
+          '\t\t\tseq_printf(m, " %s", x86_cap_flags[i]);\n')
+assert needle in src, "proc.c layout changed — braceless flag loop not found"
+src = src.replace(needle,
+    '\tfor (i = 0; i < 32*NCAPINTS; i++) {\n'
+    '\t\t/* ' + 'AVD_SPOOF_INJECTED' + ': never advertise virtualisation */\n'
+    '\t\tif (x86_cap_flags[i] && !strcmp(x86_cap_flags[i], "hypervisor"))\n'
+    '\t\t\tcontinue;\n'
+    '\t\tif (cpu_has(c, i) && x86_cap_flags[i] != NULL)\n'
+    '\t\t\tseq_printf(m, " %s", x86_cap_flags[i]);\n'
+    '\t}\n', 1)
+open(path, 'w').write(src)
+print("    injected")
+PY2
+fi
+
 echo "==> kernel customization complete"
