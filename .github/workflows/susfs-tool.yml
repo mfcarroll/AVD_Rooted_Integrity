@@ -1,0 +1,101 @@
+# Build ksu_susfs — SUSFS's userspace configurator — for every ABI we target.
+#
+# Separate from the kernel workflow on purpose. This is a tiny C program and it
+# changes only when the SUSFS pin moves, so attaching it to the kernel build
+# would add an NDK download and an extra job to every kernel change for nothing.
+#
+# It does NOT clone the AOSP kernel. build-susfs-tool.sh reads the SUSFS pin out
+# of fetch-sources.sh and clones that one tree, so this job costs minutes rather
+# than the ~3 GB the kernel sources need.
+#
+# WHY WE BUILD IT AT ALL: ksu_module_susfs ships tools/ksu_susfs_arm64 only, and
+# installs it unconditionally — so an x86_64 guest gets an AArch64 binary that
+# cannot execute, and every SUSFS rule silently goes unregistered while the
+# module reports success.
+
+name: susfs-tool
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'kernel-build/scripts/build-susfs-tool.sh'
+      - 'kernel-build/scripts/fetch-sources.sh'      # holds the pin
+      - '.github/workflows/susfs-tool.yml'
+      - '!**.md'
+
+concurrency:
+  group: susfs-tool-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  id-token: write        # Workload Identity Federation
+
+jobs:
+  build:
+    runs-on: ubuntu-latest       # the NDK is published for linux-x86_64 only
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      # ~700 MB download, ~2.5 GB unpacked. Keyed on the version pinned in the
+      # script, so a version bump there invalidates this automatically.
+      - name: Read the pinned NDK version
+        id: ndk
+        run: |
+          v=$(grep -m1 '^NDK_VERSION=' kernel-build/scripts/build-susfs-tool.sh | cut -d'"' -f2)
+          [ -n "$v" ] || { echo "::error::could not read NDK_VERSION"; exit 1; }
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+      - name: Restore NDK
+        uses: actions/cache@v4
+        with:
+          path: kernel-build/.ndk
+          key: ndk-${{ steps.ndk.outputs.version }}
+
+      - name: Build ksu_susfs
+        working-directory: kernel-build
+        run: ./scripts/build-susfs-tool.sh
+
+      # The binary that ships is the one that was just verified, so record what
+      # it is. e_machine is checked inside the script; this is the audit trail.
+      - name: Summarise
+        working-directory: kernel-build
+        run: |
+          {
+            echo "### ksu_susfs"
+            echo '```'
+            for f in out/susfs-tools/*/ksu_susfs; do
+              printf '%-40s %8s bytes  sha256 %s\n' \
+                "$f" "$(wc -c <"$f" | tr -d ' ')" "$(sha256sum "$f" | cut -c1-16)"
+            done
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ksu_susfs
+          path: kernel-build/out/susfs-tools/
+          if-no-files-found: error
+
+      # ---- Publish to GCS -------------------------------------------------
+      # Same contract as the kernel: publish to a BUILD ARTIFACT prefix, never
+      # into payloads/. That store is pinned by manifest.tsv and promotion into
+      # it stays a deliberate act.
+      - name: Authenticate to Google Cloud
+        if: vars.GCP_WORKLOAD_IDENTITY_PROVIDER != ''
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+
+      - name: Publish to GCS
+        if: vars.GCP_WORKLOAD_IDENTITY_PROVIDER != ''
+        uses: google-github-actions/upload-cloud-storage@v2
+        with:
+          path: kernel-build/out/susfs-tools
+          parent: false
+          destination: ${{ vars.GCS_BUCKET }}/susfs-tools
+          gzip: false
