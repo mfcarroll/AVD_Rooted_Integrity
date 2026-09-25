@@ -123,7 +123,22 @@ sed -i.bak "s|^APP_ABI *:=.*|APP_ABI := ${WANT_ABIS}|" "${APP_MK}"
 rm -f "${APP_MK}.bak"
 grep -q "^APP_ABI := ${WANT_ABIS}\$" "${APP_MK}" \
     || die "failed to set APP_ABI in ${APP_MK}"
-say "APP_ABI := ${WANT_ABIS}"
+
+# Drop the GNU build-id so the output is byte-reproducible.
+#
+# Measured: a local build and the CI build of the same commit differed in
+# EXACTLY 20 contiguous bytes at offset 873 — a SHA-1 build-id, derived from
+# build inputs including paths, which differ between a container at
+# /work/kernel-build and a runner at /home/runner/work/... Everything else was
+# identical.
+#
+# It matters because this binary gets promoted into payloads/ and shipped onto a
+# device. Without this, nobody can verify CI's artefact by rebuilding it; with
+# it, anyone with the pinned source and NDK gets the same bytes. The kernel build
+# pins its banner identity for the same reason.
+grep -q '^APP_LDFLAGS' "${APP_MK}" \
+    || printf 'APP_LDFLAGS := -Wl,--build-id=none\n' >> "${APP_MK}"
+say "APP_ABI := ${WANT_ABIS}, build-id disabled for reproducibility"
 
 # ---- build -----------------------------------------------------------------
 say "Building ksu_susfs"
