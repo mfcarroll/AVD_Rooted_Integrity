@@ -125,15 +125,21 @@ echo "==> Building for ${KERNEL_ARCH} (ARCH=${ARCH}, CROSS_COMPILE=${CROSS_COMPI
 # 6.6.66 we build. Starting from it makes ABI agreement the default rather than
 # something to be reverse-engineered, and our KSU/SUSFS options are appended on
 # top -- none of them add fields to struct module.
+#
+# arm64 does the same since 2026-09-28. It had been built from gki_defconfig
+# with BTF pinned off, and its vendor modules loaded anyway -- because its
+# struct module happened to match and Wild's vermagic bypass let the rest
+# through. Nothing enforced either, so a system-image update could have broken
+# it with no visible cause. configs/arm64-ranchu.config is Google's own config
+# for the android-36 arm64 kernel-ranchu, read out of the kernel image itself
+# (CONFIG_IKCONFIG embeds it). That extraction was validated against x86_64: the
+# same method on the x86_64 kernel-ranchu gives a config byte-identical to the
+# /proc/config.gz capture in configs/x86_64-ranchu.config.
 echo "==> defconfig"
-if [[ "${KERNEL_ARCH}" == "x86_64" ]]; then
-    _ref="${ROOT}/configs/x86_64-ranchu.config"
-    [[ -f "$_ref" ]] || { echo "ERROR: missing ${_ref}" >&2; exit 1; }
-    echo "    base: configs/x86_64-ranchu.config (Google's kernel-ranchu)"
-    cp "$_ref" .config
-else
-    make -j "${JOBS}" gki_defconfig
-fi
+_ref="${ROOT}/configs/${KERNEL_ARCH}-ranchu.config"
+[[ -f "$_ref" ]] || { echo "ERROR: missing ${_ref}" >&2; exit 1; }
+echo "    base: configs/${KERNEL_ARCH}-ranchu.config (Google's kernel-ranchu)"
+cp "$_ref" .config
 
 # Append config overrides:
 #  - KernelSU + every SUSFS feature
@@ -155,16 +161,11 @@ CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y
 CONFIG_LSM="landlock,lockdown,yama,loadpin,safesetid,selinux,smack,tomoyo,apparmor,bpf"
 # CONFIG_LOCALVERSION_AUTO is not set
 CONFIG_DEFAULT_HOSTNAME="localhost"
-# ARM64 ONLY: we do NOT force virtio_*/goldfish_*/dmabuf/binder/drm to =y. The
-# defconfig leaves them as =m to match the AVD's prebuilt /lib/modules/*.ko,
-# and Wild's vermagic-bypass hack (applied earlier in apply-patches.sh) lets
-# those .ko files load despite version mismatch. Forcing them =y would cause
-# init's insmod calls to fail with "Device or resource busy" -> kernel panic.
-#
-# x86_64 is the opposite and forces them =y -- see the block further down.
-# There the prebuilt modules are rejected outright on a struct-size check the
-# vermagic bypass does not cover, so leaving them as =m means no block devices
-# and a boot loop.
+# Neither arch forces virtio_*/goldfish_*/dmabuf/binder/drm to =y: both start
+# from Google's kernel-ranchu, which ships them as the AVD's vendor modules, and
+# a built-in copy shadows the vendor one ("Device or resource busy"). Wild's
+# vermagic bypass (apply-patches.sh) still covers the version-string mismatch
+# our LOCALVERSION creates; struct module agreement is what the config provides.
 EOF
 
 # LOCALVERSION NAMES NO DEVICE, deliberately. Appended here rather than inside
@@ -185,29 +186,19 @@ KERNEL_SCM_SHA=$(git -C "${KERNEL_DIR}" rev-parse --short=12 HEAD 2>/dev/null ||
 echo "CONFIG_LOCALVERSION=\"-android16-5-g${KERNEL_SCM_SHA}-ab13070261\"" >> .config
 echo "==> localversion: -android16-5-g${KERNEL_SCM_SHA}-ab13070261"
 
-# ARM64: keep BTF OFF, explicitly.
-#
-# gki_defconfig asks for CONFIG_DEBUG_INFO_BTF=y, but this image had no pahole
-# until the x86_64 work added dwarves, so the option was silently unselectable
-# and every arm64 kernel built here so far -- including the one in
-# payloads/kernel/ that reaches MEETS_STRONG_INTEGRITY -- was built WITHOUT it.
-#
-# Adding dwarves to the shared image therefore changed arm64 too, unasked: the
-# artifact grew 12.8MB -> 14.8MB and resolve_btfids ran. BTF adds a field to
-# struct module, and whether the AVD's prebuilt modules load depends on that
-# layout matching. Flipping it silently on the stack that works is exactly the
-# wrong trade.
-#
-# So pin it off here and keep CI reproducing the validated kernel. Turning it on
-# for arm64 may well be an improvement -- it is what Google ships -- but that is
-# a deliberate experiment that has to end in a re-measured integrity verdict,
-# not a side effect of an x86_64 fix.
-if [[ "${KERNEL_ARCH}" == "arm64" ]]; then
-    cat >> .config <<'EOF'
-# CONFIG_DEBUG_INFO_BTF is not set
-# CONFIG_DEBUG_INFO_BTF_MODULES is not set
+# BTF follows Google's config on both arches (=y). arm64 used to pin it OFF to
+# preserve a kernel validated without it; with arm64 now based on kernel-ranchu,
+# matching Google's struct module is the point, and BTF is part of it.
+
+# Export symbols untrimmed, on both arches. Google's arm64 config sets
+# TRIM_UNUSED_KSYMS with UNUSED_KSYMS_WHITELIST="abi_symbollist.raw", a file
+# their Kleaf build generates from android/abi_gki_aarch64*; a plain make has no
+# rule for it and dies in modpost. x86_64's config already leaves trimming off.
+# Untrimmed exports a SUPERSET: it changes neither struct module nor the CRCs
+# of the symbols vendor modules import, so it cannot stop one loading.
+cat >> .config <<'EOF'
+# CONFIG_TRIM_UNUSED_KSYMS is not set
 EOF
-fi
 
 # x86_64 hooks KSU through the indirect syscall table, which the 6.6 syscall
 # hardening replaces with direct branches. patches/x86_64/ restores an indirect
@@ -245,55 +236,40 @@ make -j "${JOBS}" olddefconfig
 # appended "CONFIG_X=y" is a request, not a result. Getting that wrong here
 # costs a full rebuild plus a boot to discover the identical panic, so check
 # what actually landed.
-if [[ "${KERNEL_ARCH}" == "x86_64" ]]; then
-    # What matters now is ABI agreement with the vendor modules, not which
-    # drivers are built in. Check the options that change struct module layout
-    # and are the reason those modules load at all.
-    _missing=()
-    # NOT CONFIG_MODULE_SCMVERSION, though Google's config sets it: the symbol
-    # is defined in no Kconfig in this tree, and struct module carries
-    # `const char *scmversion` UNCONDITIONALLY (include/linux/module.h:422, no
-    # ifdef). It controls whether a build stamp is populated, not the layout --
-    # which is why the modules already loaded without it.
-    for sym in CONFIG_DEBUG_INFO_BTF CONFIG_DEBUG_INFO_BTF_MODULES \
-               CONFIG_MODULE_UNLOAD \
-               CONFIG_KSU CONFIG_KSU_SUSFS; do
-        grep -qx "${sym}=y" .config || _missing+=("$sym")
+# What matters now is ABI agreement with the vendor modules, not which
+# drivers are built in. Check the options that change struct module layout
+# and are the reason those modules load at all.
+_missing=()
+# NOT CONFIG_MODULE_SCMVERSION, though Google's config sets it: the symbol
+# is defined in no Kconfig in this tree, and struct module carries
+# `const char *scmversion` UNCONDITIONALLY (include/linux/module.h:422, no
+# ifdef). It controls whether a build stamp is populated, not the layout --
+# which is why the modules already loaded without it.
+for sym in CONFIG_DEBUG_INFO_BTF CONFIG_DEBUG_INFO_BTF_MODULES \
+           CONFIG_MODULE_UNLOAD \
+           CONFIG_KSU CONFIG_KSU_SUSFS; do
+    grep -qx "${sym}=y" .config || _missing+=("$sym")
+done
+if (( ${#_missing[@]} )); then
+    echo "ERROR: these are not =y in the ${KERNEL_ARCH} .config:" >&2
+    for sym in "${_missing[@]}"; do
+        printf '       %s -> %s\n' "$sym" "$(grep -E "^(# )?${sym}[ =]" .config || echo 'absent')" >&2
     done
-    if (( ${#_missing[@]} )); then
-        echo "ERROR: these are not =y in the x86_64 .config:" >&2
-        for sym in "${_missing[@]}"; do
-            printf '       %s -> %s\n' "$sym" "$(grep -E "^(# )?${sym}[ =]" .config || echo 'absent')" >&2
-        done
-        echo "       The BTF and MODULE_* ones change struct module layout; losing" >&2
-        echo "       them means the AVD's vendor modules stop loading and the guest" >&2
-        echo "       boots to a black screen with surfaceflinger crash-looping." >&2
-        exit 1
-    fi
-    # And the inverse: building goldfish in shadows the vendor module, which is
-    # what goldfish_address_space is actually linked against.
-    if grep -qx 'CONFIG_GOLDFISH_PIPE=y' .config; then
-        echo "ERROR: goldfish_pipe is built in." >&2
-        echo "       The vendor goldfish_pipe.ko then fails with 'Device or resource" >&2
-        echo "       busy' and goldfish_address_space, which is built against IT," >&2
-        echo "       gets the wrong driver. Google's config sets no CONFIG_GOLDFISH." >&2
-        exit 1
-    fi
-    echo "==> x86_64 module ABI options confirmed (BTF on, goldfish not built in)"
+    echo "       The BTF and MODULE_* ones change struct module layout; losing" >&2
+    echo "       them means the AVD's vendor modules stop loading and the guest" >&2
+    echo "       boots to a black screen with surfaceflinger crash-looping." >&2
+    exit 1
 fi
-
-# The mirror of the above: arm64 must NOT have BTF, or it is no longer the
-# kernel that was validated at 3/3.
-if [[ "${KERNEL_ARCH}" == "arm64" ]]; then
-    if grep -qx 'CONFIG_DEBUG_INFO_BTF=y' .config; then
-        echo "ERROR: BTF is enabled on arm64." >&2
-        echo "       That changes struct module, which is what decides whether the" >&2
-        echo "       AVD's prebuilt modules load. The validated arm64 kernel has it" >&2
-        echo "       off. If enabling it is intended, re-measure integrity first." >&2
-        exit 1
-    fi
-    echo "==> arm64 BTF confirmed off (matches the validated kernel)"
+# And the inverse: building goldfish in shadows the vendor module, which is
+# what goldfish_address_space is actually linked against.
+if grep -qx 'CONFIG_GOLDFISH_PIPE=y' .config; then
+    echo "ERROR: goldfish_pipe is built in." >&2
+    echo "       The vendor goldfish_pipe.ko then fails with 'Device or resource" >&2
+    echo "       busy' and goldfish_address_space, which is built against IT," >&2
+    echo "       gets the wrong driver. Google's config sets no CONFIG_GOLDFISH." >&2
+    exit 1
 fi
+echo "==> ${KERNEL_ARCH} module ABI options confirmed (BTF on, goldfish not built in)"
 
 BOOT_DIR="$(arch_boot_dir)"
 
